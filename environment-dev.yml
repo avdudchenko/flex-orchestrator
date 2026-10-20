@@ -1,0 +1,27 @@
+# Development environment for flex-orchestrator.
+# Installs the sibling checkouts ../flex-pse and ../acquirium in editable mode so
+# upstream changes (flex-pse `arima_integration`, Acquirium PR #78) are picked up
+# without reinstalling. Binary solvers come from conda-forge; run
+# `idaes get-extensions` after creation for IPOPT.
+# Usage: conda env create -f environment-dev.yml
+name: flex-orch-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - scip=10.0
+  - highspy=1.15
+  - pip
+  # dev tooling
+  - pytest
+  - pytest-cov
+  - ruff
+  - pre-commit
+  - import-linter
+  - ipykernel
+  - pip:
+      - -e ../flex-pse[parameterize,solvers,testing]
+      - -e ../acquirium
+      # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
+      - httpx
+      # - -e .[dev,server]   # enable once M0 adds pyproject.toml
