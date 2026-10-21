@@ -137,6 +137,26 @@ class SolveFn(Protocol):
 - A surrogate spec is any JSON dict. For flex-pse it is a `SurrogateSpec` dump.
 - Both are stored as `.json()` input observations. A surrogate swap is a spec transformation
   (`apply_surrogate`) followed by `build`, so stored specs replay without needing `emit_model`.
+- **Built** in `flex_orchestrator.specs` (no pyomo or flex-pse imports). Writing to Acquirium comes with the M1
+  backend:
+  - `to_json_spec` turns a dict or pydantic model into plain JSON and rejects anything JSON can't hold, including
+    NaN and infinity.
+  - **Normalisation:** a spec whose format has a validator is stored in its validated form, with defaults written
+    out. For flex-pse that means `load_spec(...).model_dump(mode="json")` and `SurrogateSpec...model_dump`. So a dict
+    and the equivalent pydantic model store, and hash, the same JSON, and a later change to a flex-pse default can't
+    change what an old spec means. Without flex-pse installed, specs are stored as given.
+  - `spec_hash` is the sha256 of canonical JSON: sorted keys, no whitespace, and integral floats written as ints, so
+    `1` and `1.0` hash the same. The canonical form is **frozen** (a pinned-hash test guards it), because stored hashes
+    drive resume. `run_hash(spec_hash, overrides)` identifies one run.
+  - `spec_format` is detected from the shape: `flex-pse.flowsheet/<schema_version>`, `flex-pse.surrogate`, or `json`.
+    Users can name their own format. Validators are registered per format family, and run only when that library is
+    installed.
+  - `SpecRecord(kind, tag, spec, spec_format, spec_hash, parent_tag)` is what a store call writes. Its `metadata()`
+    gives the D10 run metadata, and `verify()` re-checks the hash when a spec is read back (D17 import). A flowsheet
+    can't be stored as a surrogate spec, or the other way round.
+  - **Tags** are 1–128 characters from `[A-Za-z0-9_.-]`, starting with a letter or digit, because they become
+    Acquirium labels and the D17 export's file names.
+  - Rendering templates such as `output_name` belongs to `StudyConfig` (M4), not `specs.py`.
 
 **D3 — The orchestrator's own model data exporter, with units.** `export_model_data(model, keys=None, include=None,
 exclude=None, time_sets=None, datetime_index=None)` returns a `ModelData` object: a list of `ExportedSeries(key, kind,
@@ -1196,7 +1216,7 @@ that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` i
 | Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. **Server (Phase 2):** every route under `/ext/<plugin>` returns 401 with no token and 403 with another tenant's token, **checked by walking every route the app registers**, so a new plugin route can't escape the check; the role in `@command(role=...)` is enforced on `/commands/{name}`; reserved prefixes are protected; plugin OpenAPI tags appear in the generated client; `create_app` is pure (two apps with different plugins don't affect each other); the isolation suite passes with a hostile plugin enabled. |
 | Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** `multilinear` and `constant_intensity` through `get_regressor` (the 0.2 types; the matrix grows with the pin); a reserved type gives a clear error naming the flex-pse version; QUDT to Pyomo conversion of column units, and an unmappable unit is an error; the hook's holdout metrics match a hand computation; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic linear data with known coefficients (ARMA data is added with U8). |
 | Hooks (D1) | callable, registered-name and import-string resolution; a bad import string gives a clear error; `SolveOutcome` failure handling. |
-| Specs | canonical hashing is stable across dict ordering; `apply_surrogate`; overrides. |
+| Specs (D2) | canonical hashing ignores key order and `1` vs `1.0`, and sees values and list order; a **pinned hash** guards the canonical form; `run_hash` over overrides; non-JSON values (sets, NaN, infinity) rejected; format detection; validators skipped when their library is missing; dict and pydantic forms store identical normalised JSON; normalisation is idempotent; kind/format mismatch rejected; tag rules; `SpecRecord` JSON round trip and `verify()` tamper check; a stored, normalised spec replays through `build`. |
 | Frames (D7) | polars ↔ pandas, DatetimeIndex restored, dtypes kept. |
 | Query (D8) | study scoping; read-only SPARQL rejects UPDATE; `runs.where` filters. |
 | Study config | schema validation, sweep expansion (product and zip), `output_name`, dry-run, resume. |

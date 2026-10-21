@@ -9,7 +9,7 @@ pytest.importorskip("flexops")
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pyomo.environ as pyo  # noqa: E402
-from flexcore.config.schema import SurrogateType  # noqa: E402
+from flexcore.config.schema import SurrogateSpec, SurrogateType  # noqa: E402
 from flexcore.exceptions import FlexConfigError  # noqa: E402
 from flexparameterize.regression import get_regressor  # noqa: E402
 
@@ -23,6 +23,7 @@ from flex_orchestrator.flexpse import (  # noqa: E402
     with_overrides,
 )
 from flex_orchestrator.hooks import DEFAULT_HOOKS, HookRegistry, run_solve  # noqa: E402
+from flex_orchestrator.specs import SpecRecord  # noqa: E402
 
 # A six-hour version of flex-pse 0.2's plant_config_demo.json (schema 0.1.0)
 # with a flat energy price instead of a tariff file, so it builds from any
@@ -365,3 +366,57 @@ def test_reserved_types_still_unimplemented(surrogate_type):
                 DEMO_SPEC, "demo.pump", {"surrogate_type": surrogate_type, "data": {}}
             )
         )
+
+
+# Specs as data (D2): validation of flex-pse specs, and replay from a record.
+
+
+@pytest.mark.unit
+def test_model_spec_record_validates_with_flexpse():
+    record = SpecRecord.create("model_spec", "base", DEMO_SPEC)
+    assert record.spec_format == "flex-pse.flowsheet/0.1.0"
+    bad = {
+        **DEMO_SPEC,
+        "elements": [e for e in DEMO_SPEC["elements"] if e["kind"] != "time"],
+    }
+    with pytest.raises(SpecError, match="Invalid flex-pse flowsheet spec"):
+        SpecRecord.create("model_spec", "bad", bad)
+
+
+@pytest.mark.unit
+def test_surrogate_spec_record_validates_with_flexpse(surrogate_case):
+    _, spec, _, _ = surrogate_case
+    record = SpecRecord.create("surrogate_spec", "fit", spec)
+    assert record.spec_format == "flex-pse.surrogate"
+    with pytest.raises(SpecError, match="Invalid flex-pse surrogate spec"):
+        SpecRecord.create("surrogate_spec", "bad", {**spec, "surrogate_type": "nope"})
+
+
+@pytest.mark.unit
+def test_dict_and_pydantic_surrogate_store_the_same_spec():
+    from_dict = SpecRecord.create("surrogate_spec", "s", LINEAR_POWER)
+    from_model = SpecRecord.create(
+        "surrogate_spec", "s", SurrogateSpec.model_validate(LINEAR_POWER)
+    )
+    assert from_dict.spec == from_model.spec
+    assert from_dict.spec_hash == from_model.spec_hash
+    assert from_dict.spec["provenance"] == {}
+
+
+@pytest.mark.unit
+def test_flowsheet_normalisation_is_idempotent():
+    record = SpecRecord.create("model_spec", "base", DEMO_SPEC)
+    assert record.spec != DEMO_SPEC  # defaults written out
+    again = SpecRecord.create("model_spec", "base", record.spec)
+    assert again.spec == record.spec
+    assert again.spec_hash == record.spec_hash
+
+
+@pytest.mark.unit
+def test_stored_spec_replays_without_the_live_model():
+    derived = apply_surrogate(DEMO_SPEC, "demo.pump", LINEAR_POWER)
+    record = SpecRecord.create("model_spec", "with_fit", derived, parent_tag="base")
+    stored = SpecRecord.model_validate_json(record.model_dump_json())
+    stored.verify()
+    model = build(stored.spec)
+    assert model.demo.pump.find_component("surrogate_power_electrical") is not None

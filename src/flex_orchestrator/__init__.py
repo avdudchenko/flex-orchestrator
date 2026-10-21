@@ -14,6 +14,7 @@ from flex_orchestrator.hooks import (
     SwapSurrogateFn,
     run_solve,
 )
+from flex_orchestrator.specs import SpecRecord, canonical_json, spec_hash, to_json_spec
 
 __version__ = _dist_version("flex-orchestrator")
 
@@ -28,6 +29,10 @@ __all__ = [
     "SolveFn",
     "SolveOutcome",
     "SpecError",
+    "SpecRecord",
     "SwapSurrogateFn",
+    "canonical_json",
     "run_solve",
+    "spec_hash",
+    "to_json_spec",
 ]

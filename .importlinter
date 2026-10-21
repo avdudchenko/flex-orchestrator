@@ -16,10 +16,11 @@ forbidden_modules =
     starlette
 
 [importlinter:contract:format-agnostic-core]
-name = hooks, errors and testing don't import pyomo, flex-pse or Acquirium
+name = hooks, specs, errors and testing don't import pyomo, flex-pse or Acquirium
 type = forbidden
 source_modules =
     flex_orchestrator.hooks
+    flex_orchestrator.specs
     flex_orchestrator.errors
     flex_orchestrator.testing
 forbidden_modules =
