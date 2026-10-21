@@ -168,3 +168,13 @@ def test_unknown_study_or_run(backend, study):
 def test_json_variables_have_no_unit(backend, study):
     with pytest.raises(StorageError, match="can't have a unit"):
         backend.declare(study, "outcome", role="output", kind="json", unit="KiloW")
+
+
+def test_nan_in_a_timeseries_is_rejected(backend, study):
+    backend.declare(study, "v", role="output", kind="timeseries")
+    run_id = backend.start_run(study, {})
+    with pytest.raises(StorageError):
+        backend.record(
+            run_id, "v", list(zip(hours(2), [float("nan"), 1.0], strict=True))
+        )
+    backend.finish_run(run_id)

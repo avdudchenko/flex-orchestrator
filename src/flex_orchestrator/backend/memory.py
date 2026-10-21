@@ -114,7 +114,7 @@ class MemoryBackend:
         if variable is None:
             raise StorageError(f"Variable {label!r} isn't declared.")
         if variable.kind == "timeseries":
-            rows = sorted((to_utc(when), v) for when, v in value)
+            rows = sorted(((to_utc(when), v) for when, v in value), key=lambda r: r[0])
             self._check_json([v for _, v in rows])
             entry.records[label] = Record(label, "timeseries", rows=rows)
         else:

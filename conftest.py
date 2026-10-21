@@ -27,6 +27,13 @@ def pytest_collection_modifyitems(config, items):
     if errors:
         raise pytest.UsageError("\n".join(errors))
 
+    # The benchmark tier is opt-in: it runs only when selected with -m.
+    if "benchmark" not in (config.option.markexpr or ""):
+        skip = pytest.mark.skip(reason="benchmark tier: run with -m benchmark")
+        for item in items:
+            if item.get_closest_marker("benchmark"):
+                item.add_marker(skip)
+
     needs = {
         marker.name[len("needs_") :]
         for item in items

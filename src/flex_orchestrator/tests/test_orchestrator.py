@@ -309,3 +309,17 @@ def test_solve_and_store_uses_the_orchestrators_solve_hook(memory_backend, demo_
     orch.create_study("s")
     stored = orch.solve_and_store("base", build(copy.deepcopy(demo_spec)), keys=[POWER])
     assert stored.outcome.solver == "fake"
+
+
+# store_model_data
+
+
+def test_store_model_data_takes_exported_values(memory_orch, demo_model):
+    data = export_model_data(demo_model, keys=[POWER])
+    stored = memory_orch.store_model_data("base", data, OK)
+    assert stored.keys == [POWER]
+    assert memory_orch.model_results("base")[POWER].values == data[POWER].values
+    with pytest.raises(TagExistsError):
+        memory_orch.store_model_data("base", data)
+    with pytest.raises(TypeError, match="SolveOutcome"):
+        memory_orch.store_model_data("other", data, "ok")

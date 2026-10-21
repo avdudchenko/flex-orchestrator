@@ -203,11 +203,8 @@ class Orchestrator:
                 exported or stored.
         """
         self._check_new(tag)
-        if outcome is not None and not isinstance(outcome, SolveOutcome):
-            raise TypeError(
-                f"outcome must be a SolveOutcome, not {type(outcome).__name__}."
-            )
-        writes = []
+        _check_outcome(outcome)
+        data = None
         if outcome is None or outcome.ok:
             data = export_model_data(
                 model,
@@ -220,32 +217,33 @@ class Orchestrator:
                 datetime_index=datetime_index,
                 unit_mapper=self.unit_mapper,
             )
-            writes = results.plan_writes(self.backend, self._runs, data)
-            results.declare(self.backend, self._runs, writes)
-        if outcome is not None:
-            self.backend.declare(self._runs, SOLVE_OUTCOME, role="output", kind="json")
-        run_id = self.backend.start_run(self._runs, self._metadata(tag))
-        try:
-            results.record(self.backend, run_id, writes)
-            if outcome is not None:
-                self.backend.record(
-                    run_id, SOLVE_OUTCOME, outcome.model_dump(mode="json")
-                )
-        except BaseException as exc:
-            self.backend.fail_run(run_id, exc)
-            raise
-        if outcome is not None and not outcome.ok:
-            self.backend.fail_run(
-                run_id,
-                SolveNotOptimal(
-                    f"solve {outcome.status} ({outcome.termination}): {outcome.message}"
-                ),
-            )
-            return StoredResult(tag, run_id, "failed", outcome)
-        self.backend.finish_run(run_id)
-        return StoredResult(
-            tag, run_id, "succeeded", outcome, [w.series.key for w in writes]
-        )
+        return self._store(tag, data, outcome)
+
+    def store_model_data(
+        self, tag: str, data: ModelData, outcome: SolveOutcome | None = None
+    ) -> StoredResult:
+        """Store values that are already exported under ``tag``.
+
+        :meth:`store_model_results` is this after
+        :func:`~flex_orchestrator.export.export_model_data`. Use it directly for
+        values exported another way, e.g. from a model that isn't Pyomo.
+
+        Args:
+            tag: The result's tag, unique among the study's results.
+            data: The values.
+            outcome: How the solve ended. If it isn't ``ok``, ``data`` is
+                ignored and only the outcome is stored, in a ``failed`` run.
+
+        Returns:
+            What was stored.
+
+        Raises:
+            TagExistsError: If a result with this tag is running or succeeded.
+            StorageError, UnitError: If the values can't be stored.
+        """
+        self._check_new(tag)
+        _check_outcome(outcome)
+        return self._store(tag, data, outcome)
 
     def solve_and_store(
         self,
@@ -318,6 +316,38 @@ class Orchestrator:
 
     # Internals
 
+    def _store(
+        self, tag: str, data: ModelData | None, outcome: SolveOutcome | None
+    ) -> StoredResult:
+        writes = []
+        if data is not None and (outcome is None or outcome.ok):
+            writes = results.plan_writes(self.backend, self._runs, data)
+            results.declare(self.backend, self._runs, writes)
+        if outcome is not None:
+            self.backend.declare(self._runs, SOLVE_OUTCOME, role="output", kind="json")
+        run_id = self.backend.start_run(self._runs, self._metadata(tag))
+        try:
+            results.record(self.backend, run_id, writes)
+            if outcome is not None:
+                self.backend.record(
+                    run_id, SOLVE_OUTCOME, outcome.model_dump(mode="json")
+                )
+        except BaseException as exc:
+            self.backend.fail_run(run_id, exc)
+            raise
+        if outcome is not None and not outcome.ok:
+            self.backend.fail_run(
+                run_id,
+                SolveNotOptimal(
+                    f"solve {outcome.status} ({outcome.termination}): {outcome.message}"
+                ),
+            )
+            return StoredResult(tag, run_id, "failed", outcome)
+        self.backend.finish_run(run_id)
+        return StoredResult(
+            tag, run_id, "succeeded", outcome, [w.series.key for w in writes]
+        )
+
     @property
     def _runs(self) -> str:
         return self._ledger(self.study, "runs")
@@ -352,6 +382,13 @@ class Orchestrator:
                 return None
             raise
         return hook(model) or None
+
+
+def _check_outcome(outcome: Any) -> None:
+    if outcome is not None and not isinstance(outcome, SolveOutcome):
+        raise TypeError(
+            f"outcome must be a SolveOutcome, not {type(outcome).__name__}."
+        )
 
 
 def _tag_metadata(tag: str) -> dict[str, str]:
