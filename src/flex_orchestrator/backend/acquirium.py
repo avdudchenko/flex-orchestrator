@@ -9,7 +9,7 @@ Acquirium allows one active run per ``Study`` object, so each run gets its own
 one cached handle per study.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import requests
@@ -147,7 +147,16 @@ class AcquiriumBackend:
         ]
         return sorted(found, key=lambda run: run.started_at)
 
-    def records(self, study: str, run_id: str) -> list[Record]:
+    def variables(self, study: str) -> list[Variable]:
+        """Return every variable declared in the study."""
+        # A fresh handle loads every declaration, including ones made elsewhere.
+        handle = _call(self.acquirium.study.get, study)
+        self._studies[study] = handle
+        return [_variable(v) for v in handle.variables.all()]
+
+    def records(
+        self, study: str, run_id: str, labels: Sequence[str] | None = None
+    ) -> list[Record]:
         """Return what a run recorded, in the order it was recorded."""
         handle = self._study(study)
         try:
@@ -157,6 +166,8 @@ class AcquiriumBackend:
         found = []
         for observation in _call(run.observations().all):
             variable = observation.variable
+            if labels is not None and variable.label not in labels:
+                continue
             if variable.kind == "timeseries":
                 frame = _call(handle.client.timeseries_df, observation.ref_uri)
                 rows = [

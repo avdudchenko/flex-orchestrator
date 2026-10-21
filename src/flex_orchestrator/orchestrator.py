@@ -1,10 +1,11 @@
-"""The orchestrator: studies and model results on a storage backend (PLAN.md D4).
+"""The orchestrator: studies, datasets and model results on a storage backend.
 
 Model results are stored **explicitly**: every call names the model and the
-tag, and there is no "current model" (D4). A study ``s`` is laid out as
-backend studies (D10): ``s`` itself, and ``s::runs``, where each stored result
-is one run carrying ``{flexorch_kind: "result", flexorch_tag: tag}``, the
-exported model values as outputs, and the ``solve_outcome`` JSON.
+tag, and there is no "current model" (PLAN.md D4). A study ``s`` is laid out as
+backend studies (D10): ``s`` itself; ``s::runs``, where each stored result is
+one run carrying ``{flexorch_kind: "result", flexorch_tag: tag}``, the exported
+model values as outputs, and the ``solve_outcome`` JSON; and ``s::data``, where
+each dataset is one run (D6, :mod:`flex_orchestrator.data`).
 """
 
 from collections.abc import Iterable, Sequence
@@ -12,9 +13,12 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal
 
-from flex_orchestrator import results
-from flex_orchestrator.backend.base import StorageBackend
+from flex_orchestrator import data as datasets
+from flex_orchestrator import frames, results
+from flex_orchestrator.backend.base import StorageBackend, to_utc
+from flex_orchestrator.data import DATA_KIND, StoredData
 from flex_orchestrator.errors import (
+    AmbiguousColumnError,
     HookError,
     StudyExistsError,
     StudyNotFoundError,
@@ -32,6 +36,8 @@ from flex_orchestrator.hooks import (
 from flex_orchestrator.specs import check_tag
 
 RESULT_KIND = "result"
+LEDGERS = {RESULT_KIND: "runs", DATA_KIND: "data"}
+"""dict: Item kind -> the ledger study (``<s>::<ledger>``) that holds it (D10)."""
 SOLVE_OUTCOME = "solve_outcome"
 """str: The label of the JSON output that holds a result's solve outcome."""
 
@@ -78,6 +84,7 @@ class Orchestrator:
             with the backend's ``resolve_unit``.
         strict_units: With the default mapper, raise on a unit with no QUDT
             key instead of storing it without one.
+        frame: What reads return by default, ``"polars"`` or ``"pandas"`` (D7).
 
     Example:
         >>> from flex_orchestrator.backend import MemoryBackend
@@ -95,6 +102,7 @@ class Orchestrator:
         registry: HookRegistry | None = None,
         unit_mapper: UnitMapper | None = None,
         strict_units: bool = False,
+        frame: frames.FrameKind = "polars",
     ) -> None:
         """Set up the orchestrator; see the class docstring for the arguments."""
         self.backend = backend
@@ -103,6 +111,11 @@ class Orchestrator:
         self.unit_mapper = unit_mapper or UnitMapper(
             resolver=backend.resolve_unit, strict=strict_units
         )
+        if frame not in frames.FRAME_KINDS:
+            raise ValueError(
+                f"frame must be one of {frames.FRAME_KINDS}, not {frame!r}."
+            )
+        self.frame = frame
         self._study: str | None = None
         if study is not None:
             self.select_study(study)
@@ -135,7 +148,7 @@ class Orchestrator:
                 f"Study {name!r} exists; use select_study({name!r}) to work in it."
             )
         self.backend.define_study(name)
-        self.backend.define_study(self._ledger(name, "runs"))
+        self._define_ledgers(name)
         self._study = name
         return name
 
@@ -149,7 +162,7 @@ class Orchestrator:
             raise StudyNotFoundError(
                 f"There is no study {name!r}; use create_study({name!r}) to make it."
             )
-        self.backend.define_study(self._ledger(name, "runs"))
+        self._define_ledgers(name)
         self._study = name
         return name
 
@@ -158,6 +171,108 @@ class Orchestrator:
         if self.backend.has_study(name):
             return self.select_study(name)
         return self.create_study(name)
+
+    # Datasets (D6)
+
+    def store_data(
+        self,
+        name: str,
+        df: Any,
+        units: dict[str, str | None] | None = None,
+        *,
+        time_column: str | None = None,
+    ) -> StoredData:
+        """Store a table of measured data as the dataset ``name``.
+
+        Each column becomes a timeseries with its unit, so it can be queried,
+        converted and used to fit surrogates (D19). Timestamps are stored in
+        UTC; naive ones are taken as UTC.
+
+        Args:
+            name: The dataset's name, unique among the study's datasets.
+            df: A polars or pandas DataFrame of numeric columns.
+            units: ``{column: unit}``, as QUDT keys (``"M3-PER-DAY"``) or as
+                written (``"m3/day"``, ``"gal/min"``). Columns left out have no
+                unit.
+            time_column: The datetime column. For pandas the default is the
+                index; for polars, the only datetime column.
+
+        Returns:
+            What was stored.
+
+        Raises:
+            TagExistsError: If the dataset exists.
+            StorageError: If the table can't be stored (no datetimes, repeated
+                timestamps, a non-numeric column, an empty table).
+
+        Example:
+            >>> units = {"biogas_volume": "m3/day"}
+            >>> orch.store_data("biogas_data", df, units=units)  # doctest: +SKIP
+        """
+        self._check_new(name, DATA_KIND)
+        timestamps, columns = frames.to_columns(df, time_column)
+        return datasets.store(
+            self.backend,
+            self._ledger(self.study, LEDGERS[DATA_KIND]),
+            name,
+            timestamps,
+            columns,
+            dict(units or {}),
+            self.unit_mapper,
+            self._metadata(name, DATA_KIND),
+        )
+
+    def get_data(
+        self,
+        name: str | None = None,
+        columns: list[str] | None = None,
+        start: Any = None,
+        end: Any = None,
+        *,
+        column: str | None = None,
+        frame: frames.FrameKind | None = None,
+    ) -> Any:
+        """Read a dataset, or one column found across the study's datasets.
+
+        Args:
+            name: The dataset.
+            columns: Only these columns, in this order.
+            start: Only rows at or after this datetime (naive means UTC).
+            end: Only rows at or before this datetime.
+            column: Instead of ``name``: a column name, looked up across the
+                study's datasets.
+            frame: ``"polars"`` or ``"pandas"``; the orchestrator's default if
+                omitted.
+
+        Returns:
+            A polars DataFrame with a ``time`` column first, or a pandas
+            DataFrame with a UTC ``DatetimeIndex``.
+
+        Raises:
+            TagNotFoundError: If the dataset, or a dataset with ``column``,
+                doesn't exist.
+            AmbiguousColumnError: If ``column`` is in several datasets.
+        """
+        if (name is None) == (column is None):
+            raise TypeError("Give the dataset name, or column= to look one up.")
+        if column is not None:
+            name, columns = self._dataset_with(column), [column]
+        ledger = self._ledger(self.study, LEDGERS[DATA_KIND])
+        run = self._latest(name, DATA_KIND)
+        timestamps, values = datasets.read(
+            self.backend, ledger, run.run_id, name, columns
+        )
+        keep = [
+            i
+            for i, when in enumerate(timestamps)
+            if (start is None or when >= to_utc(start))
+            and (end is None or when <= to_utc(end))
+        ]
+        return frames.from_columns(
+            [timestamps[i] for i in keep],
+            {c: [v[i] for i in keep] for c, v in values.items()},
+            frame or self.frame,
+        )
 
     # Model results (D4)
 
@@ -305,14 +420,8 @@ class Orchestrator:
         Raises:
             TagNotFoundError: If no succeeded result has this tag.
         """
-        found = self.backend.runs(
-            self._runs, status="succeeded", metadata=_tag_metadata(tag)
-        )
-        if not found:
-            raise TagNotFoundError(
-                f"Study {self.study!r} has no stored result {tag!r}."
-            )
-        return results.read_model_data(self.backend, self._runs, found[-1].run_id)
+        run = self._latest(tag, RESULT_KIND)
+        return results.read_model_data(self.backend, self._runs, run.run_id)
 
     # Internals
 
@@ -350,23 +459,69 @@ class Orchestrator:
 
     @property
     def _runs(self) -> str:
-        return self._ledger(self.study, "runs")
+        return self._ledger(self.study, LEDGERS[RESULT_KIND])
 
     @staticmethod
     def _ledger(study: str, name: str) -> str:
         return f"{study}::{name}"
 
-    def _check_new(self, tag: str) -> None:
+    def _define_ledgers(self, study: str) -> None:
+        for ledger in LEDGERS.values():
+            self.backend.define_study(self._ledger(study, ledger))
+
+    def _check_new(self, tag: str, kind: str = RESULT_KIND) -> None:
         check_tag(tag)
-        for run in self.backend.runs(self._runs, metadata=_tag_metadata(tag)):
+        ledger = self._ledger(self.study, LEDGERS[kind])
+        for run in self.backend.runs(ledger, metadata=_tag_metadata(tag, kind)):
             if run.status in ("running", "succeeded"):
                 raise TagExistsError(
-                    f"Study {self.study!r} already has a {run.status} result "
+                    f"Study {self.study!r} already has a {run.status} {kind} "
                     f"{tag!r} (run {run.run_id})."
                 )
 
-    def _metadata(self, tag: str) -> dict[str, str]:
-        return {**_tag_metadata(tag), "flexorch_version": version("flex-orchestrator")}
+    def _latest(self, tag: str, kind: str) -> Any:
+        ledger = self._ledger(self.study, LEDGERS[kind])
+        found = self.backend.runs(
+            ledger, status="succeeded", metadata=_tag_metadata(tag, kind)
+        )
+        if not found:
+            raise TagNotFoundError(
+                f"Study {self.study!r} has no stored {kind} {tag!r}."
+            )
+        return found[-1]
+
+    def _dataset_with(self, column: str) -> str:
+        ledger = self._ledger(self.study, LEDGERS[DATA_KIND])
+        stored = {
+            run.metadata["flexorch_tag"]
+            for run in self.backend.runs(
+                ledger, status="succeeded", metadata={"flexorch_kind": DATA_KIND}
+            )
+        }
+        found = sorted(
+            {
+                v.metadata.get("dataset")
+                for v in self.backend.variables(ledger)
+                if v.metadata.get("column") == column
+            }
+            & stored
+        )
+        if not found:
+            raise TagNotFoundError(
+                f"No dataset in study {self.study!r} has a column {column!r}."
+            )
+        if len(found) > 1:
+            raise AmbiguousColumnError(
+                f"Column {column!r} is in datasets {found}; name the dataset, e.g. "
+                f"get_data({found[0]!r}, columns=[{column!r}])."
+            )
+        return found[0]
+
+    def _metadata(self, tag: str, kind: str = RESULT_KIND) -> dict[str, str]:
+        return {
+            **_tag_metadata(tag, kind),
+            "flexorch_version": version("flex-orchestrator"),
+        }
 
     def _time_sets(self, model: Any) -> list[Any] | None:
         ref = self.hooks.time_sets
@@ -391,5 +546,5 @@ def _check_outcome(outcome: Any) -> None:
         )
 
 
-def _tag_metadata(tag: str) -> dict[str, str]:
-    return {"flexorch_kind": RESULT_KIND, "flexorch_tag": tag}
+def _tag_metadata(tag: str, kind: str = RESULT_KIND) -> dict[str, str]:
+    return {"flexorch_kind": kind, "flexorch_tag": tag}

@@ -3,6 +3,7 @@
 from importlib.metadata import version as _dist_version
 
 from flex_orchestrator.errors import (
+    AmbiguousColumnError,
     ExportError,
     FlexOrchestratorError,
     HookError,
@@ -48,6 +49,7 @@ def __getattr__(name):
 
 
 __all__ = [
+    "AmbiguousColumnError",
     "DEFAULT_HOOKS",
     "ExportError",
     "ApplySurrogateFn",

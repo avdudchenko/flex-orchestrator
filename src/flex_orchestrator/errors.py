@@ -67,3 +67,7 @@ class TagExistsError(FlexOrchestratorError):
 
 class TagNotFoundError(FlexOrchestratorError, LookupError):
     """Nothing is stored in the study under this kind and tag."""
+
+
+class AmbiguousColumnError(FlexOrchestratorError, LookupError):
+    """A column name looked up across datasets is in more than one (PLAN.md D6)."""

@@ -7,7 +7,7 @@ contract the way Acquirium does, so the contract tests pass on both.
 import copy
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -148,12 +148,20 @@ class MemoryBackend:
             and all(entry.run.metadata.get(k) == v for k, v in (metadata or {}).items())
         ]
 
-    def records(self, study: str, run_id: str) -> list[Record]:
+    def variables(self, study: str) -> list[Variable]:
+        """Return every variable declared in the study."""
+        return list(self._study(study).values())
+
+    def records(
+        self, study: str, run_id: str, labels: Sequence[str] | None = None
+    ) -> list[Record]:
         """Return what a run recorded, in the order it was recorded."""
         entry = self._runs.get(run_id)
         if entry is None or entry.study != study:
             raise StorageError(f"Study {study!r} has no run {run_id!r}.")
-        return list(entry.records.values())
+        return [
+            r for r in entry.records.values() if labels is None or r.label in labels
+        ]
 
     def _study(self, name: str) -> dict[str, Variable]:
         try:

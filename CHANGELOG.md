@@ -39,6 +39,18 @@
   converted to a label's declared unit. New `StorageError`,
   `StudyExistsError`, `StudyNotFoundError`, `TagExistsError` and
   `TagNotFoundError`; new `acquirium` extra.
+- Data API (PLAN.md D6): `Orchestrator.store_data(name, df, units=,
+  time_column=)` and `get_data(name, columns=, start=, end=, column=,
+  frame=)`; one dataset is one run of `<s>::data`, one timeseries per column.
+  Units given as text (`m3/day`) or QUDT keys. New `AmbiguousColumnError`,
+  `StoredData`, the `frame=` default on `Orchestrator`, and
+  `flex_orchestrator.frames` (polars/pandas in and out). polars and pandas
+  are now dependencies.
+- `Orchestrator.store_model_data(tag, data, outcome)` stores values that are
+  already exported.
+- Storage contract: `variables(study)` and `records(..., labels=)`.
+- An opt-in `benchmark` tier (`pytest -m benchmark -s`) with the D5 storage
+  benchmark.
 - The flex-pse `time_sets` hook returns `[]` for a model without exactly one
   TimeBlock, so user models store through the default hooks.
 - `flex_orchestrator.testing`: fake hooks for tests without a solver, and the

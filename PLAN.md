@@ -331,6 +331,29 @@ selection rather than adding a separate file store.
 - `get_data(name, columns=None, start=None, end=None, frame=...)` reads it back.
 - `get_data(column=...)` finds a single column across datasets, and raises an error if the name is ambiguous.
 
+**Built** in `flex_orchestrator.data` and `Orchestrator.store_data` / `get_data`, on the D4 storage contract. What
+the build settled:
+- **No separate datasource.** A dataset is one run of `<s>::data` (`{flexorch_kind: "data", flexorch_tag: name}`),
+  and each column is that run's timeseries input, labelled `<name>/<column>` so two datasets can share a column
+  name. Acquirium stores a run's streams under `experiment/<run_id>` itself, so there is no `flexorch/<study>/<name>`
+  datasource to register. Column variables carry `dataset`, `column` and `unit_text` metadata; the `manifest` JSON
+  lists the columns in order, their units, the row count and the time range.
+- **Signatures:** `store_data(name, df, units=None, *, time_column=None) -> StoredData(name, run_id, columns, rows,
+  units)`; `get_data(name=None, columns=None, start=None, end=None, *, column=None, frame=None)`. `start` and `end`
+  are both inclusive. A dataset name is stored once (`TagExistsError`); datasets and results are separate kinds.
+- **Input tables:** pandas uses its `DatetimeIndex` unless `time_column=` is given; polars uses its only datetime
+  column unless one is named. Columns must be numeric. NaN and pandas' `NA` become missing values. Infinite values,
+  repeated timestamps, empty tables, and `units=` naming a column the table doesn't have are refused before a run
+  starts. Timestamps are stored in UTC (naive means UTC).
+- **Units:** as written by the user (`"m3/day"`, `"gal/min"`) or as QUDT keys. They go through the exporter's
+  `UnitMapper` (pint's parts, verified), then the resolver's own text lookup, which understands spellings pint
+  can't parse (`m3/day`, `GAL_US-PER-MIN`). Only a verified key is declared; the text is always kept. Without a
+  resolver (the memory backend) units are text only, with no warning.
+- **Reads:** a polars frame with a `time` column first, or a pandas frame with a UTC `DatetimeIndex` named `time`.
+  Only the requested columns' data is read (`records(labels=)`). `get_data(column=)` looks through the declared
+  columns of succeeded datasets: none → `TagNotFoundError`, several → `AmbiguousColumnError` naming them.
+- **Contract additions:** `variables(study)` and `records(..., labels=)`. polars and pandas are core dependencies.
+
 **D7 — You choose polars or pandas.**
 - Every read accepts `frame="polars" | "pandas"`.
 - The default is set per orchestrator, `Orchestrator(..., frame="pandas")`.
@@ -1066,7 +1089,7 @@ under `examples/` runs from start to finish.
 - Referenced spec files (D2): the flex-pse `spec_assets` hook, assets stored as `.file()` inputs, `spec_hash`
   covering asset hashes, and `materialize_spec` for replay.
 - The tombstone ledger, deleted items hidden from reads, `replace=True`, and `purge` → `NotImplementedError`.
-- `frames.py`.
+- `frames.py`: polars/pandas in and out **built** with D6; D7 adds `.to_pandas()` / `.to_polars()` on results.
 - **Exit:**
   - Script 1 up to `store_model_spec` works in modes 1, 2 and 3.
   - A spec with a tariff file, stored and then rebuilt from another working directory, gives the same model; editing

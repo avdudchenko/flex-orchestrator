@@ -9,6 +9,8 @@ description = "Run, store and query flex-pse studies on an Acquirium experiment 
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
+    "polars>=1",
+    "pandas>=2",
 ]
 
 [project.optional-dependencies]

@@ -155,8 +155,19 @@ class StorageBackend(Protocol):
             metadata: Only runs whose metadata has these exact values.
         """
 
-    def records(self, study: str, run_id: str) -> list[Record]:
-        """Return what a run recorded, in the order it was recorded."""
+    def variables(self, study: str) -> list[Variable]:
+        """Return every variable declared in the study."""
+
+    def records(
+        self, study: str, run_id: str, labels: Sequence[str] | None = None
+    ) -> list[Record]:
+        """Return what a run recorded, in the order it was recorded.
+
+        Args:
+            study: The study.
+            run_id: The run.
+            labels: Only these labels; a backend then reads only their data.
+        """
 
 
 def to_utc(when: Any) -> datetime:

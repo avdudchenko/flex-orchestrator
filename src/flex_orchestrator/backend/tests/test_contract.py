@@ -178,3 +178,26 @@ def test_nan_in_a_timeseries_is_rejected(backend, study):
             run_id, "v", list(zip(hours(2), [float("nan"), 1.0], strict=True))
         )
     backend.finish_run(run_id)
+
+
+def test_variables_lists_every_declaration(backend, study):
+    backend.declare(
+        study, "a/x", role="input", kind="timeseries", metadata={"column": "x"}
+    )
+    backend.declare(study, "manifest", role="input", kind="json")
+    found = {v.label: v for v in backend.variables(study)}
+    assert set(found) == {"a/x", "manifest"}
+    assert found["a/x"].metadata == {"column": "x"}
+
+
+def test_records_can_read_only_some_labels(backend, study):
+    for label in ("a", "b", "c"):
+        backend.declare(study, label, role="output", kind="scalar")
+    run_id = backend.start_run(study, {})
+    for i, label in enumerate(("a", "b", "c")):
+        backend.record(run_id, label, float(i))
+    backend.finish_run(run_id)
+    assert [r.label for r in backend.records(study, run_id, labels=["c", "a"])] == [
+        "a",
+        "c",
+    ]
