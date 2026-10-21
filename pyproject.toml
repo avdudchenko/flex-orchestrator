@@ -24,6 +24,8 @@ dev = [
     "black==26.5.1",
     "pre-commit",
 ]
+# The model data exporter (flex_orchestrator.export) needs pyomo; flex-pse brings it.
+pyomo = ["pyomo>=6.8"]
 docs = ["sphinx", "myst-parser", "furo"]
 
 [tool.hatch.build.targets.wheel]

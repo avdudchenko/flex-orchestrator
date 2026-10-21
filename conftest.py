@@ -5,6 +5,7 @@ Mirrors flex-pse's conftest: every test carries exactly one tier marker, a
 unit tests can't invoke a solver or open a network connection.
 """
 
+import copy
 import importlib.util
 
 import pytest
@@ -70,3 +71,20 @@ def _no_solver_in_unit_tier(request, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", _no_network)
     monkeypatch.setattr(socket.socket, "connect_ex", _no_network)
+
+
+@pytest.fixture
+def demo_spec():
+    """A fresh copy of the shared flex-pse demo flowsheet spec."""
+    from flex_orchestrator.testing import DEMO_SPEC
+
+    return copy.deepcopy(DEMO_SPEC)
+
+
+@pytest.fixture
+def demo_model(demo_spec):
+    """The flex-pse demo, built (not solved) with the default build hook."""
+    pytest.importorskip("flexops")
+    from flex_orchestrator.flexpse import build
+
+    return build(demo_spec)

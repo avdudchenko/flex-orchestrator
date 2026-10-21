@@ -15,6 +15,21 @@
   canonical `spec_hash` / `run_hash`, `detect_format`, `validate_spec`
   (normalises flex-pse specs through their validators), `check_tag` and
   `SpecRecord`; flex-pse validators in `flex_orchestrator.flexpse`.
-- `flex_orchestrator.testing` fake hooks for tests without a solver.
+- Model data exporter (PLAN.md D3): `flex_orchestrator.export` with
+  `export_model_data` (identity-based time detection, time / time x custom /
+  custom / scalar classification, `ModelData` / `ExportedSeries`), and
+  `UnitMapper`, which generates QUDT keys from pint's unit parts
+  (`L/day` -> `L-PER-DAY`) and verifies them through an optional resolver,
+  plus `conversion_factor`. New `ExportError` and `UnitError`; new
+  `pyomo` extra.
+- A `time_sets` hook kind (`TimeSetsFn`); the flex-pse default
+  (`flex_orchestrator.flexpse.time_sets`) registers the TimeBlock's time
+  set plus the `startup` / `shutdown` index sets, so those export as
+  timeseries.
+- `flex_orchestrator.testing`: fake hooks for tests without a solver, and the
+  shared flex-pse specs tests build models from: `DEMO_SPEC`, plus
+  `LOGIC_SPEC`, `SURROGATE_DISPATCH_SPEC` and `NETWORK_SPEC` emitted from
+  flex-pse's round-trip corpus (repo-wide `demo_spec` / `demo_model`
+  fixtures).
 - Project scaffold: `pyproject.toml`, black/ruff/import-linter config and
   pre-commit hooks matching flex-pse (PLAN.md D20), pytest tier markers.

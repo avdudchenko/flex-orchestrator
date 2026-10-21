@@ -151,7 +151,13 @@ def test_to_refs_rejects_unresolved_name():
 
 def test_default_hooks_are_flexpse_import_strings():
     refs = DEFAULT_HOOKS.to_refs()
-    assert set(refs) == {"build", "solve", "apply_surrogate", "swap_surrogate"}
+    assert set(refs) == {
+        "build",
+        "solve",
+        "apply_surrogate",
+        "swap_surrogate",
+        "time_sets",
+    }
     assert all(ref.startswith("flex_orchestrator.flexpse:") for ref in refs.values())
 
 

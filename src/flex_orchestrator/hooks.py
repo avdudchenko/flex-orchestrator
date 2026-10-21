@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, computed_field
 
 from flex_orchestrator.errors import HookError
 
-HOOK_KINDS = ("build", "solve", "apply_surrogate", "swap_surrogate")
+HOOK_KINDS = ("build", "solve", "apply_surrogate", "swap_surrogate", "time_sets")
 """tuple[str, ...]: The hook slots a :class:`HookSet` has."""
 
 SolveStatus = Literal["ok", "failed", "error"]
@@ -172,6 +172,28 @@ class SwapSurrogateFn(Protocol):
         """
 
 
+class TimeSetsFn(Protocol):
+    """Names a built model's time Sets, for the exporter (PLAN.md D3).
+
+    Example:
+        >>> def time_sets(model) -> list:
+        ...     return [model.t]
+    """
+
+    def __call__(self, model: Any) -> list[Any]:
+        """Return the model's time Sets, main one first.
+
+        Args:
+            model: The built model.
+
+        Returns:
+            The Pyomo Sets that are time, compared by identity: the main time
+            Set, then any Sets indexing only part of it (e.g. every point but
+            the first). The exporter maps their values to the main Set's
+            timestamps.
+        """
+
+
 HookRef = Any
 """A hook as given by a user: a callable, an import string or a registered name."""
 
@@ -189,6 +211,7 @@ class HookSet:
         solve: The :class:`SolveFn`.
         apply_surrogate: The optional :class:`ApplySurrogateFn`.
         swap_surrogate: The optional :class:`SwapSurrogateFn`.
+        time_sets: The optional :class:`TimeSetsFn`.
 
     Example:
         >>> hooks = DEFAULT_HOOKS.merged(HookSet(build="mypkg.models:build"))
@@ -200,6 +223,7 @@ class HookSet:
     solve: HookRef = None
     apply_surrogate: HookRef = None
     swap_surrogate: HookRef = None
+    time_sets: HookRef = None
 
     def merged(self, other: "HookSet") -> "HookSet":
         """Return these hooks with every slot ``other`` sets taking precedence.
@@ -269,6 +293,7 @@ DEFAULT_HOOKS = HookSet(
     solve="flex_orchestrator.flexpse:solve",
     apply_surrogate="flex_orchestrator.flexpse:apply_surrogate",
     swap_surrogate="flex_orchestrator.flexpse:swap_surrogate",
+    time_sets="flex_orchestrator.flexpse:time_sets",
 )
 """HookSet: The flex-pse hooks, used when nothing else is configured."""
 
@@ -374,6 +399,7 @@ class HookRegistry:
         solve: HookRef = None,
         apply_surrogate: HookRef = None,
         swap_surrogate: HookRef = None,
+        time_sets: HookRef = None,
         replace: bool = False,
     ) -> HookSet:
         """Register a named set of hooks.
@@ -385,6 +411,7 @@ class HookRegistry:
             solve: A callable or import string.
             apply_surrogate: A callable or import string.
             swap_surrogate: A callable or import string.
+            time_sets: A callable or import string.
             replace: Allow replacing a set already registered under ``name``.
 
         Returns:
@@ -405,7 +432,7 @@ class HookRegistry:
                 f"Hooks {name!r} are already registered; pass replace=True to "
                 "replace them."
             )
-        hooks = HookSet(build, solve, apply_surrogate, swap_surrogate)
+        hooks = HookSet(build, solve, apply_surrogate, swap_surrogate, time_sets)
         for kind, hook in hooks.slots().items():
             if hook is None or callable(hook):
                 continue

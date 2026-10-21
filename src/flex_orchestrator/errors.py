@@ -26,3 +26,16 @@ class SpecError(FlexOrchestratorError):
     set), and for a surrogate swap aimed at a unit the spec or model doesn't
     have.
     """
+
+
+class ExportError(FlexOrchestratorError):
+    """Model values can't be exported (PLAN.md D3).
+
+    Raised for a key that names nothing, ambiguous or inconsistent time sets,
+    two values that would be stored under the same key, or a named component
+    with non-numeric values.
+    """
+
+
+class UnitError(FlexOrchestratorError):
+    """A unit can't be mapped to QUDT (in strict mode) or converted."""

@@ -1,0 +1,123 @@
+{
+  "schema_version": "0.1.0",
+  "name": "surrogate_and_dispatch",
+  "elements": [
+    {
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-01T06:00",
+      "time_step": "1 h",
+      "kind": "time"
+    },
+    {
+      "property_class": "SimpleAqueousFlow",
+      "kind": "property_package",
+      "name": "properties"
+    },
+    {
+      "kind": "costing",
+      "name": "costing",
+      "energy_prices": {
+        "electrical": {
+          "value": 0.1,
+          "units": "USD/kWh"
+        }
+      }
+    },
+    {
+      "kind": "plant",
+      "name": "site"
+    },
+    {
+      "kind": "unit",
+      "name": "site.pump",
+      "unit_model_class": "Pump",
+      "io_variables": [
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "flow_vol_phase",
+          "role": "output",
+          "units": "m^3/h"
+        },
+        {
+          "name": "power_electrical",
+          "role": "output",
+          "units": "kW"
+        }
+      ]
+    },
+    {
+      "kind": "unit",
+      "name": "site.battery",
+      "unit_model_class": "BatteryModel",
+      "construction_options": {
+        "capacity": {
+          "value": 10.0,
+          "units": "kWh"
+        }
+      },
+      "property_package": null,
+      "io_variables": [
+        {
+          "name": "power_charge",
+          "role": "input",
+          "units": "kW"
+        },
+        {
+          "name": "power_discharge",
+          "role": "input",
+          "units": "kW"
+        },
+        {
+          "name": "power_electrical",
+          "role": "output",
+          "units": "kW"
+        },
+        {
+          "name": "charge",
+          "role": "output",
+          "units": "kWh"
+        }
+      ]
+    },
+    {
+      "kind": "surrogate",
+      "unit": "site.pump",
+      "surrogate_type": "multilinear",
+      "data": {
+        "input_variables": {
+          "flow_out": "m^3/hr"
+        },
+        "output_variables": {
+          "power_electrical": "kW"
+        },
+        "coefficients": {
+          "flow_out": 0.8,
+          "intercept": 1.5
+        }
+      },
+      "provenance": {
+        "source": "datasheet"
+      }
+    },
+    {
+      "kind": "dispatch",
+      "unit": "site.battery",
+      "variable": "power_charge",
+      "values": [
+        0.0,
+        1.0,
+        2.0,
+        2.0,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "kind": "objective"
+    }
+  ]
+}

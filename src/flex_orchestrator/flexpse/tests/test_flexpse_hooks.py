@@ -20,75 +20,12 @@ from flex_orchestrator.flexpse import (  # noqa: E402
     build,
     solve,
     swap_surrogate,
+    time_sets,
     with_overrides,
 )
 from flex_orchestrator.hooks import DEFAULT_HOOKS, HookRegistry, run_solve  # noqa: E402
 from flex_orchestrator.specs import SpecRecord  # noqa: E402
-
-# A six-hour version of flex-pse 0.2's plant_config_demo.json (schema 0.1.0)
-# with a flat energy price instead of a tariff file, so it builds from any
-# working directory.
-DEMO_SPEC = {
-    "schema_version": "0.1.0",
-    "name": "demo",
-    "elements": [
-        {
-            "kind": "time",
-            "start_date": "2025-07-08",
-            "end_date": "2025-07-08T06:00",
-            "time_step": "1 hr",
-        },
-        {
-            "kind": "property_package",
-            "name": "properties",
-            "property_class": "SimpleAqueousFlow",
-        },
-        {
-            "kind": "costing",
-            "name": "costing",
-            "energy_prices": {"electrical": {"value": 0.1, "units": "USD/kWh"}},
-        },
-        {"kind": "plant", "name": "demo"},
-        {
-            "kind": "unit",
-            "name": "demo.tank",
-            "unit_model_class": "Tank",
-            "costing_package": None,
-            "construction_options": {
-                "max_volume": {"value": 1000.0, "units": "m^3"},
-                "initial_volume": {"value": 500.0, "units": "m^3"},
-            },
-            "connections": [
-                {"port": "outlet", "to": "demo.pump.inlet", "name": "arc_0"}
-            ],
-        },
-        {
-            "kind": "unit",
-            "name": "demo.pump",
-            "unit_model_class": "ConstantEnergyIntensityModel",
-            "construction_options": {
-                "energy_intensity": {"value": 0.5, "units": "kWh/m^3"}
-            },
-        },
-        {
-            "kind": "unit",
-            "name": "demo.battery",
-            "unit_model_class": "BatteryModel",
-            "property_package": None,
-            "construction_options": {"capacity": {"value": 10.0, "units": "kWh"}},
-        },
-        {"kind": "objective", "name": "objective"},
-    ],
-}
-
-LINEAR_POWER = {
-    "surrogate_type": "multilinear",
-    "data": {
-        "input_variables": {"flow_in": "m^3/hr"},
-        "output_variables": {"power_electrical": "kW"},
-        "coefficients": {"intercept": 0.0, "flow_in": 0.6},
-    },
-}
+from flex_orchestrator.testing import DEMO_SPEC, LINEAR_POWER  # noqa: E402
 
 FLOW_10 = {"demo.pump.flow_in": 10.0}
 
@@ -108,6 +45,7 @@ def test_default_hooks_resolve_to_flexpse_functions():
     assert resolved.solve is solve
     assert resolved.apply_surrogate is apply_surrogate
     assert resolved.swap_surrogate is swap_surrogate
+    assert resolved.time_sets is time_sets
 
 
 @pytest.mark.unit

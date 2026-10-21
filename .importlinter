@@ -29,3 +29,14 @@ forbidden_modules =
     flexops
     flexparameterize
     acquirium
+
+[importlinter:contract:exporter-pyomo-only]
+name = the exporter depends only on pyomo, not flex-pse or Acquirium
+type = forbidden
+source_modules =
+    flex_orchestrator.export
+forbidden_modules =
+    flexcore
+    flexops
+    flexparameterize
+    acquirium

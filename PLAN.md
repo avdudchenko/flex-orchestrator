@@ -117,6 +117,8 @@ class SolveFn(Protocol):
 - Optional hooks: `apply_surrogate(spec, unit, surrogate_spec, relation=None) -> spec` (edits the spec) and
   `swap_surrogate(model, unit, surrogate_spec, relation=None)` (edits a live model). `relation=None` means the hook's
   default.
+- Optional hook `time_sets(model) -> [Set, ...]`: the model's time Sets, main one first, for the exporter (D3).
+  The flex-pse default adds the partial-horizon Sets flex-pse logic builds.
 - The defaults live in `flex_orchestrator.flexpse` and target flex-pse 0.2 (**built**):
   - `build` adds each override as a flex-pse `fix` element (`"override:<path>"`), then calls `flexops.build_model`.
     An override path is a variable path from the model root (`"demo.pump.flow_in"`, `"...flow_in[3]"`, `"...[*]"`),
@@ -157,6 +159,27 @@ class SolveFn(Protocol):
   - **Tags** are 1–128 characters from `[A-Za-z0-9_.-]`, starting with a letter or digit, because they become
     Acquirium labels and the D17 export's file names.
   - Rendering templates such as `output_name` belongs to `StudyConfig` (M4), not `specs.py`.
+- **Referenced files (planned, M1).** A spec can point at files it doesn't embed, so the stored spec alone can't
+  rebuild the model. In a flex-pse flowsheet these are the costing element's `tariff_source` (a path, a list, or a
+  `{name: path}` mapping) and `dr.events_source`, plus any `{"$source": "<path>"}` value: price values, `dispatch`
+  values and `fix` values. flex-pse resolves them relative to the spec file's directory, or the working directory
+  for a dict spec, which on Ray is the worker's. The plan:
+  - **Find them.** A per-format `assets` hook, next to the validator (`flex_orchestrator.flexpse:spec_assets`),
+    returns each reference as a JSON pointer plus the path. Generic `json` specs can declare theirs explicitly
+    (`store_model_spec(..., assets={"tariff": "path"})`).
+  - **Store them with the spec.** `store_model_spec(tag, spec, base_dir=...)` reads each file and records it in
+    `SpecRecord.assets` as `{pointer: {name, sha256, size}}`. It stores the bytes once per hash as `.file()` input
+    observations (Acquirium artifacts), and stores the spec with each path rewritten to the asset's stable name
+    (`assets/<sha256[:12]>-<filename>`). A missing file is an error, never a silent skip.
+  - **Hash what the model depends on.** `spec_hash` then covers the spec *and* the asset hashes. Otherwise a run
+    with an edited tariff file and an unchanged spec would look identical, and resume (D9) would wrongly skip it.
+    For specs without assets the hash stays exactly as now (the pinned-hash test still holds).
+  - **Replay.** Before a build, `materialize_spec(record, dir)` writes the assets to a directory, on the worker for
+    Ray (D13), and points the spec's paths at them. The build hook never sees stored names.
+  - **Export.** D17 study exports include `specs/assets/<name>` files and list them in `checksums.sha256`, so an
+    exported study rebuilds offline.
+  - This is D2 work, not D3 (the exporter reads built models, not specs). It lands with spec storage in M1, because
+    it needs Acquirium's file artifacts; the discovery hook and hashing can be built before that.
 
 **D3 — The orchestrator's own model data exporter, with units.** `export_model_data(model, keys=None, include=None,
 exclude=None, time_sets=None, datetime_index=None)` returns a `ModelData` object: a list of `ExportedSeries(key, kind,
@@ -197,11 +220,21 @@ index, values, unit_pyomo, unit_qudt, component, raw_index)`. It works in four s
      - `max_scalars_per_component` (default 10,000): above that limit it warns and skips the component, unless that
        component was named explicitly in `keys`.
      - A component with no value (stale or uninitialised) is recorded as `None` with a `stale` flag, not left out.
-3. **Pull out the units.** `pyo.units.get_units(component)` gives the Pyomo unit. A `UnitMapper` translates it to a
-   QUDT key, in this order:
-   - a built-in table (`m**3/hr` → `M3-PER-HR`, `kW` → `KiloW`, `USD` → `USD`, …);
-   - Acquirium's `resolve_unit`;
-   - user overrides (`unit_map={...}`).
+3. **Pull out the units.** `pyo.units.get_units(element)` gives the Pyomo unit; it is read from a data element,
+   not the component, because a Reference (flex-pse's `flow_in`) reports `dimensionless` for itself. A `UnitMapper`
+   translates it to a QUDT key. **Keys are generated, not looked up in a table of combinations**, so any unit
+   built from known parts works (`L/day` → `L-PER-DAY` needs no entry):
+   - user overrides (`unit_map={...}`), by exact string, so the user always wins;
+   - otherwise pint splits the unit into parts `(prefix, base unit, exponent)` (`kWh` → `kilo` + `watt_hour`), and
+     the key is composed by QUDT's naming rule: prefix + base symbol, the exponent as a digit, numerator parts
+     joined by `-`, then `-PER-` and the denominator (`J/(kg*K)` → `J-PER-KiloGM-K`). Only **base units** need a QUDT
+     symbol: `BASE_UNITS` lists about 25 (`liter` → `L`, `hour` → `HR`, …), a currency `XYZ` becomes `CCY_XYZ`, and
+     any other base is looked up through the resolver (`psi` → `PSI`, `hp` → `HP`);
+   - with a resolver (Acquirium's `resolve_unit`, always passed by the Acquirium backend), every generated key is
+     **verified**: it must exist in QUDT with the same SI multiplier as the Pyomo unit, to 1 ppm, because QUDT stores
+     some multipliers to about 7 figures. Other orderings of the parts are tried if QUDT spells the unit
+     differently. QUDT text matching alone is never trusted: it resolves Pyomo's `a` (a year) to `ARE` (an area);
+   - without a resolver, keys are generated but marked unverified (`ExportedSeries.unit_verified`).
    Results are cached for each session. If a unit can't be resolved, strict mode raises an error. Otherwise the value
    is stored with `unit=None` and the raw Pyomo unit is kept in the variable metadata, with a warning.
 4. **Declare and record in Acquirium.**
@@ -211,6 +244,37 @@ index, values, unit_pyomo, unit_qudt, component, raw_index)`. It works in four s
    - **Unit consistency:** a label's unit can't change once declared. If a later run produces the same key in a
      different unit with the same dimensions, the values are converted to the unit already declared. If the
      dimensions don't match, it raises an error.
+
+**Built** (steps 1–3) in `flex_orchestrator.export`, which depends only on pyomo (an import-linter rule). The
+step 4 writer comes with the M1 backend; `conversion_factor(from_unit, to_unit)` is ready for its declared-unit
+check. What the build settled:
+- **Signature:** `export_model_data(model, keys=None, include=None, exclude=None, time_sets=None,
+  datetime_index=None, unit_mapper=None, max_scalars_per_component=10_000)`.
+- **Selection:** `keys` alone exports only those keys, and `keys` plus `include` gives the union. A key can name
+  one element (`"capital_cost[p2]"`). The default walk skips private (`_`-prefixed) names, immutable Params and
+  anything in a deactivated block, such as a swapped-out relation. References like `flow_in` are exported under
+  their own names, even though they duplicate the underlying state-block variable.
+- **Time:** the TimeBlock is found by duck typing (a block with a `time_index` Set and a `datetime_index`), so
+  the walker doesn't import flex-pse. Several TimeBlocks are an error unless `time_sets=` is given. Extra
+  `time_sets` entries must be subsets of the first; their points take the main set's timestamps. With no
+  `datetime_index`, the datetimes come from the block that holds the main time set, or else the raw time values
+  are used. **flex-pse's own subsets of time**: `add_startup_shutdown` indexes `startup` / `shutdown` over `t >= 1`
+  through an anonymous Set with no link to `time_index`, so by identity they'd export as one scalar per point. The
+  default `time_sets` hook (a new D1 hook kind, `flex_orchestrator.flexpse:time_sets`) registers the TimeBlock's
+  `time_index` plus those index Sets, found on the units themselves and never by value, so they export as
+  timeseries over every point but the first (upstream item U10). If the time position in a product index can't be
+  located (a factor of unknown width before it, or time appearing twice), the component is treated as custom.
+- **Missing values:** `None` is recorded only when the model has no value, or the value is NaN, and the key is
+  listed in `ModelData.stale()`. Pyomo's own `stale` flag is **not** used, because fixed parameters keep valid
+  values while Pyomo marks them stale.
+- **Checked against real QUDT** (component tests, using Acquirium's bundled vocabulary): every `BASE_UNITS` entry,
+  and generated keys for `L/day`, `kg/day`, `mg/L`, `ug/L`, `m/s**2`, `J/kg/K`, `W/m**2`, `kmol/h`, `gal/min`,
+  `MWh`, `degC/h` and more, plus `psi` and `hp` found through the resolver. pint turns `degC` inside a compound
+  unit into a temperature difference, which maps to `DEG_C` the way QUDT spells rates (`DEG_C-PER-HR`).
+- **Units QUDT lacks.** QUDT has no compound currency units (`USD/kWh`, `USD/a`, `USD/kW`) and no `kWh/m^3`. With a
+  resolver these export with `unit_qudt=None` and keep their Pyomo unit. Without one they get their generated key
+  (`CCY_USD-PER-YR`), marked unverified. So most flex-pse costing values have no verified QUDT unit (upstream
+  item U9). Acquirium stores `unit=` as plain metadata without checking it, so nothing breaks.
 
 The exporter has no Acquirium dependency (it produces `ModelData`). The writer is a second step, so the exporter can
 be tested without a database.
@@ -966,10 +1030,14 @@ under `examples/` runs from start to finish.
   - redaction.
 - Study create, select and list with the D9 guards. Tagged stores for specs and data (`units=`, polars or pandas
   input).
+- Referenced spec files (D2): the flex-pse `spec_assets` hook, assets stored as `.file()` inputs, `spec_hash`
+  covering asset hashes, and `materialize_spec` for replay.
 - The tombstone ledger, deleted items hidden from reads, `replace=True`, and `purge` → `NotImplementedError`.
 - `frames.py`.
 - **Exit:**
   - Script 1 up to `store_model_spec` works in modes 1, 2 and 3.
+  - A spec with a tariff file, stored and then rebuilt from another working directory, gives the same model; editing
+    the tariff file changes `spec_hash`.
   - A wrong password gives `DBAuthError`, and the password never appears in logs or metadata.
   - The contract, duplicate and tombstone tests pass.
 
@@ -1119,6 +1187,14 @@ under `examples/` runs from start to finish.
   D19 ships with the 0.2 types. When a flex-pse release has it, a follow-up bumps the pin and adds ARIMA (with the
   gap-free `prep` check and ARMA fixture data) to the D19 test matrix and docs. The same goes for quadratic,
   exponential and neural-network surrogates as they get implemented.
+- **U9 (Acquirium):** QUDT has no compound currency units (`USD/kWh`, `USD/a`, `USD/kW`) or `kWh/m^3`, which
+  flex-pse costing uses everywhere. The orchestrator already generates QUDT-style keys for them
+  (`CCY_USD-PER-KiloW-HR`, `KiloW-HR-PER-M3`), so the ask is that Acquirium's converter recognise composed keys:
+  parse them by the same rule, and derive their multiplier from the parts. Then these values get queryable,
+  convertible units. Until then they're stored with the Pyomo unit only (D3).
+- **U10 (flex-pse):** declare the partial-horizon Sets that logic uses (e.g. `time_block.time_index_after_first`
+  for `startup` / `shutdown`) as named Sets on the TimeBlock, built from `time_index`. Then the identity check finds
+  them directly, and the `time_sets` hook no longer needs to know which Vars use them.
 - **U3 (Acquirium):** hard delete of studies and runs, cascading to observations, artifacts and streams; a
   `superseded` status for runs; optionally a unique-name flag on `define`. When this lands, `purge` gets implemented.
 - **U4 (Acquirium):** an optional auth hook / API-key middleware, as defence in depth inside the tenant network.
@@ -1182,14 +1258,25 @@ find and review. This differs from flex-pse on purpose.
 **Shared fixtures (the repo-root `conftest.py`, plus a `conftest.py` in a package's `tests/` for fixtures only it uses)**
 - `memory_backend`, `acquirium_local` (session-scoped, with a fresh study per test), and `orch` (parametrised over
   both backends).
-- `toy_pyomo_model`, covering:
-  - a time-only component;
-  - `(t, unit)` and `(unit, t)` product-set components;
-  - a component indexed only by a custom set (string and tuple indices);
-  - a **decoy `Set(range(N))` the same length as time**;
-  - an unregistered subset of time;
-  - one Var without units.
-- `flexpse_digester_model`: built from flex-pse's `api_freeze` fixtures; skipped if flex-pse isn't installed.
+- **Tests on Pyomo models use flex-pse models.** `flex_orchestrator.testing.DEMO_SPEC`, the six-hour flex-pse 0.2
+  demo flowsheet, is the shared spec. The repo-root `demo_spec` fixture is a copy of it, and `demo_model` is it
+  built with the default build hook (skipped without flex-pse). So tests exercise flex-pse's real `TimeBlock`,
+  References, state blocks and units, not a hand-made stand-in.
+- **flex-pse's own models, not hand-made ones.** Besides `DEMO_SPEC`, `flex_orchestrator.testing` holds three
+  specs emitted with `flexops.emit_model` from flex-pse 0.2.0's round-trip corpus, kept as JSON and re-emitted when the
+  pin moves. Between them they contain every structure the exporter has to classify:
+  - `LOGIC_SPEC`: indexed RO trains `p.ro[0..2]` over the set `p.trains = [0, 1, 2]` (a **real decoy**: its values
+    are valid time positions, but it isn't time), and `startup` / `shutdown` indexed over every time point but the
+    first by an anonymous Set (a **real subset of time**);
+  - `SURROGATE_DISPATCH_SPEC`: a pump surrogate's `coefficient_vars`, indexed by coefficient name only, and a battery
+    with fixed dispatch values;
+  - `NETWORK_SPEC`: paths through a network of two plants.
+  The demo itself covers time-only, `(t, power kind)` and `(t, phase)` components, References and costing units.
+- **Non-flex-pse models only for D1.** `test_walker_user_models.py` covers what a user's own Pyomo model can contain
+  and flex-pse models don't: no TimeBlock, a custom index before time, nested products, index Sets of unknown width,
+  index values that aren't strings or numbers, non-numeric Params, and inconsistent expression units.
+- More flex-pse specs (a digester with `biogas_relation`, a spec with a tariff file for the referenced-files work
+  in D2) are added to `flex_orchestrator.testing` as the milestones need them.
 - `fake_hooks`, and `frame_kind` (`polars` or `pandas`).
 - `surrogate_case`: parametrised over the surrogate types the **pinned flex-pse implements** (0.2: `multilinear` and
   `constant_intensity`). Each case carries a spec, the unit and relation it targets, the regressor that fits it,
@@ -1209,10 +1296,10 @@ that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` i
 | Uniqueness (D9) | `create_study` on an existing study raises an error; `select_study` on a missing study raises an error; an existing tag → `TagExistsError`; a failed run can be retried; `replace=True` tombstones and rewrites; the post-write check catches a simulated race; `on_existing` modes. |
 | Tombstones | a tombstoned item is hidden; `include_deleted` shows it; the tag can be reused; tombstones survive a Postgres-only restore; `purge` raises `NotImplementedError`; `deletion.mode=disabled` blocks deletion. |
 | Exporter (D3) | key and glob selection; time detection compares the **Set object itself** (a lookalike `Set(range(N))` is not time); time found among the factors of `(t, unit)` and `(unit, t)`; an unregistered subset of time is treated as custom; `datetime_index` mapping; time × custom → a series per value; custom-only → a scalar per element with `name[idx]` keys and `component`/`index` metadata; key collisions raise an error; `max_scalars_per_component`; stale values flagged; inactive components skipped. |
-| Units | the table is checked against `pyo.units`; resolver fallback (mocked in unit tests, real QUDT in component tests); strict versus lenient; converting to the declared unit; a dimension mismatch raises an error. |
+| Units | keys generated from pint's parts for compound, prefixed, powered and currency units (`L/day`, `kW*h`, `J/kg/K`, `km**2`, `degC/h`, `USD/kWh`); units with no key warn once (cached) or raise in strict mode; overrides win; with a resolver, keys are verified (multiplier to 1 ppm), other part orderings are tried, unlisted bases are found (`psi`), wrong multipliers are rejected (the `a` → `ARE` case), offset answers can't stand for a part, and the whole-unit lookup is the last resort; **against real QUDT** (component): every base unit, and the generated keys for a list of real units; `conversion_factor`, including dimension-mismatch and offset-unit errors. |
 | Round-trip | export → store → read back: values and units are equal, for both frame kinds. |
 | Connection / credentials (D11) | mode selection and conflicting arguments; DSN escaping (`@:/%` in passwords); precedence between `*_FILE`, `FLEXORCH_*`, `PG*` and `.pgpass`; the DSN reaches the child process only through the environment, and the toml contains no `pg_dsn`; a **redaction test** that searches logs, exceptions, `server.log` and metadata for the password; a wrong password → `DBAuthError`; preflight failures; a second managed server is refused; `recreate` is rejected. |
-| Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from `toy_pyomo_model`; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; tombstones are only exported with `include_deleted`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
+| Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from the flex-pse fixture models; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; tombstones are only exported with `include_deleted`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
 | Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. **Server (Phase 2):** every route under `/ext/<plugin>` returns 401 with no token and 403 with another tenant's token, **checked by walking every route the app registers**, so a new plugin route can't escape the check; the role in `@command(role=...)` is enforced on `/commands/{name}`; reserved prefixes are protected; plugin OpenAPI tags appear in the generated client; `create_app` is pure (two apps with different plugins don't affect each other); the isolation suite passes with a hostile plugin enabled. |
 | Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** `multilinear` and `constant_intensity` through `get_regressor` (the 0.2 types; the matrix grows with the pin); a reserved type gives a clear error naming the flex-pse version; QUDT to Pyomo conversion of column units, and an unmappable unit is an error; the hook's holdout metrics match a hand computation; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic linear data with known coefficients (ARMA data is added with U8). |
 | Hooks (D1) | callable, registered-name and import-string resolution; a bad import string gives a clear error; `SolveOutcome` failure handling. |
