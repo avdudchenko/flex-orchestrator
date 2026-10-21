@@ -41,10 +41,11 @@ This document is the plan only. No orchestrator code has been written yet.
 | Querying | `ac.query()` / `ac.explore()` builder, `ac.attr.*` expressions, `find_entity`, `find_all_data`, `sparql`, `Q.data()/.dataframe()`, `study.experiments.where(...).frame()` | Returns **polars**. |
 | Units | QUDT ontology bundled; `client.resolve_unit("gal/min")` (`client.py:801`), `/resolve_conversion`, `/conversion_factors` | Turns free-form unit strings into QUDT units. |
 | FlexPSE ↔ Acquirium example | `acquirium/examples/flexpse/record_experiment.py` | Reference pattern (it reads values by hand with `pyo.value` and `pyo.units.convert`). |
-| Model spec | flex-pse `ModelConfig` (pydantic v2), `load_model_config` / `dump_model_config` | The default spec format. |
-| Build / solve | `flexops.build_model(config)`; `flexcore.solvers.get_solver(model=m).solve(m)` | These are the **defaults only**. Users can supply their own (D1). |
-| Surrogate spec | `SurrogateSpec`; `ArimaRegressor(order=(p,d,q)).fit(X, y).to_surrogate_spec()` | Exists. |
-| `m.emit_model()` (built model → spec) | — | Missing in flex-pse (upstream item U1). |
+| Model spec | flex-pse 0.2 flowsheet spec: `FlowsheetSpec` (schema `0.1.0`), a flat list of `elements` whose `name` is the component's model path; `flexcore.config.io.load_spec` | The default spec format. Older `ModelConfig` documents (schema `0.0.x`) are not used. |
+| Build / solve | `flexops.build_model(spec)` (expands arcs itself); `flexcore.solvers.get_solver(model=m, prefer=spec.solver).solve(m)`; `flexops.apply_spec(m, elements)` applies `fix` / `unfix` / `dispatch` / `surrogate` elements to a live model | These are the **defaults only**. Users can supply their own (D1). |
+| Surrogate spec | `SurrogateSpec`, and the `surrogate` element (`unit`, `relation`, `surrogate_type`, `data`) | In 0.2 **two types work end to end**: `multilinear` (`MultilinearSurrogate` replaces the relation) and `constant_intensity` (no class; the build fixes the unit's intensity parameter). `quadratic`, `exponential`, `arima` and `neural_network` are reserved stubs that raise `NotImplementedError`. |
+| Regressors | `flexparameterize.regression`: `LinearRegressor().fit(X, y, input_units=, output_units=)` gives `multilinear`; `ConstantIntensityRegressor().fit(X, y).to_surrogate_spec(input_units=, output_units=)` gives `constant_intensity`; `get_regressor(SurrogateType)`; `to_fit_result() -> FitResult` (coefficients, r2/rmse, n_samples, data window) | Exist in 0.2. Neither has `predict`. The ARIMA regressor is only on the `arima_integration` branch (upstream item U8). |
+| `emit_model(m)` (built model → spec) | `flexops.emit_model` | Exists in 0.2 (was upstream item U1). Not needed by D2, but usable for provenance. |
 | Model data → export | only `FlexCosting.report_cost() -> CostReport` | **Missing.** The orchestrator builds its own exporter (D3). |
 | Multi-tenancy / auth | — | **Acquirium has neither.** Its client takes only `server_url`, `server_port` and `use_ssl` (`Client/acquirium.py:49`). There is one server process per data store. Tenancy has to be provided **around** Acquirium (D14). |
 | Database credentials | `pg_dsn` in `[server]` of `acquirium.toml`, or the `PG_DSN` env var (`Server/config.py:43`, `manager.py:126`). Passed unchanged to `psycopg.connect(dsn)` (`timescale_store.py:67`). | The credentials belong to the **Acquirium server process**. HTTP clients never see them. |
@@ -83,10 +84,12 @@ together** (D14).
 
 ### How the pseudocode maps to what exists
 - `or` is a reserved word in Python, so the examples use `orch`.
-- The orchestrator does not wrap flex-pse fitters (`ArimaRegressor(order=...).fit(X, y)`). Users bring any object that
+- The pseudocode's `ArimaSurrogate` loop has no 0.2 equivalent yet (U8). Until then the same workflow is planned and
+  tested with `multilinear` surrogates. The orchestrator does not wrap flex-pse fitters (`LinearRegressor().fit(...)`).
+  Users bring any object that
   produces a spec.
-- `swap_relation` takes a `Surrogate` object (`surrogate_from_spec(spec)`), not a spec, and the digester's relation is
-  called `"biogas_relation"`.
+- A surrogate goes in as a `surrogate` element naming the unit and the relation. The default relation is
+  `"power_electrical_relation"`; the digester's is `"biogas_relation"`, so it must be named.
 - `store_model_results(tag)` has no model argument, so the model is passed explicitly (D4).
 - `get_data('biogas_volume')` reads one column, but the data was stored as the dataset `'biog_gas_data'`
   (D6 covers lookup by column).
@@ -111,10 +114,16 @@ class SolveFn(Protocol):
     def __call__(self, model: Any, **options) -> SolveOutcome: ...     # SolveOutcome(ok, status, termination, message, wall_time, log)
 ```
 
-- Optional hooks: `apply_surrogate(spec, unit, surrogate_spec) -> spec` (edits the spec) and
-  `swap_surrogate(model, unit, relation, surrogate_spec)` (edits a live model).
-- The defaults live in `flex_orchestrator.flexpse` and wrap `flexops.build_model`, arc expansion, `get_solver` and
-  the termination check.
+- Optional hooks: `apply_surrogate(spec, unit, surrogate_spec, relation=None) -> spec` (edits the spec) and
+  `swap_surrogate(model, unit, surrogate_spec, relation=None)` (edits a live model). `relation=None` means the hook's
+  default.
+- The defaults live in `flex_orchestrator.flexpse` and target flex-pse 0.2 (**built**):
+  - `build` adds each override as a flex-pse `fix` element (`"override:<path>"`), then calls `flexops.build_model`.
+    An override path is a variable path from the model root (`"demo.pump.flow_in"`, `"...flow_in[3]"`, `"...[*]"`),
+    and its value is a number or `{"value", "units"}`. Price sweeps edit the `costing` element instead (M4).
+  - `solve` calls `get_solver` (preferring the spec's `solver`) and maps the termination to `SolveOutcome`.
+  - `apply_surrogate` adds a `surrogate` element, replacing one for the same unit and relation;
+    `swap_surrogate` applies the same element to a live model with `flexops.apply_spec`.
 - Hooks can be passed in three ways:
   1. As callables to `execute_study(cfg, build=my_build, solve=my_solve)` or `Orchestrator(..., build=, solve=)`.
   2. Registered by name with `orch.register_hooks("my_model", build=..., solve=...)`.
@@ -123,11 +132,11 @@ class SolveFn(Protocol):
 - A user who writes their own `ExportFn` can store models that aren't Pyomo at all.
 
 **D2 — Specs are stored as data.**
-- A model spec is any JSON-serialisable dict. For flex-pse that is `ModelConfig.model_dump(mode="json")`, validated
-  when flex-pse is installed.
+- A model spec is any JSON-serialisable dict. For flex-pse it is a flowsheet spec (`FlowsheetSpec`, schema `0.1.0`)
+  as JSON, validated when flex-pse is installed.
 - A surrogate spec is any JSON dict. For flex-pse it is a `SurrogateSpec` dump.
 - Both are stored as `.json()` input observations. A surrogate swap is a spec transformation
-  (`apply_surrogate`) followed by `build`, so stored specs replay without needing `m.emit_model()`.
+  (`apply_surrogate`) followed by `build`, so stored specs replay without needing `emit_model`.
 
 **D3 — The orchestrator's own model data exporter, with units.** `export_model_data(model, keys=None, include=None,
 exclude=None, time_sets=None, datetime_index=None)` returns a `ModelData` object: a list of `ExportedSeries(key, kind,
@@ -313,12 +322,12 @@ example_a/                                  # one folder per study
     biogas_data.json                        # one file per dataset (D6)
   specs/
     models/base_model.json                  # one file per model spec tag (D2)
-    models/model_with_surrogate_order_1.json
-    surrogates/order_1.json                 # one file per surrogate spec tag
+    models/model_with_surrogate_biogas_h1.json
+    surrogates/biogas_h1.json               # one file per surrogate spec tag
   fits/
-    order_1.json                            # one file per fit run (D19): regressor, params, diagnostics, data provenance
+    biogas_h1.json                          # one file per fit run (D19): regressor, params, diagnostics, data provenance
   results/
-    model_with_surrogate_order_1.json       # one file per result tag (D3/D4)
+    model_with_surrogate_biogas_h1.json       # one file per result tag (D3/D4)
   tombstones.json                           # only with include_deleted=True
   checksums.sha256                          # sha256 of every file, checked on import
 ```
@@ -334,9 +343,9 @@ Schemas are published in `docs/schemas/`.
 ```json
 {
   "schema": "flexorch-export/1",
-  "tag": "model_with_surrogate_order_1",
+  "tag": "model_with_surrogate_biogas_h1",
   "run_id": "…", "status": "succeeded", "started_at": "…", "finished_at": "…",
-  "model_spec_ref": {"tag": "model_with_surrogate_order_1", "spec_hash": "…"},
+  "model_spec_ref": {"tag": "model_with_surrogate_biogas_h1", "spec_hash": "…"},
   "overrides": {"costing.electricity_price": 0.1},
   "hooks": {"build": "flex_orchestrator.flexpse:build", "solve": "flex_orchestrator.flexpse:solve"},
   "solve_outcome": {"ok": true, "status": "ok", "termination": "optimal", "wall_time": 12.3},
@@ -364,7 +373,7 @@ Schemas are published in `docs/schemas/`.
 ```python
 report = orch.export_study("exports/example_a", parts=("specs", "data", "results"),
                            tags=None, include_deleted=False, compress=False)   # compress → *.json.gz
-orch.export_result("model_with_surrogate_order_1", "exports/r1.json")          # a single file
+orch.export_result("model_with_surrogate_biogas_h1", "exports/r1.json")          # a single file
 res = flex_orchestrator.archive.load_result("exports/example_a/results/…json")  # no DB needed → ResultHandle
 res.to_frame("pandas"); res.units
 
@@ -496,9 +505,17 @@ plugin = Plugin(
 **the same JSON parameters**. It is built on flex-pse's generic regression interface,
 `flexparameterize.regression`:
 - the `Regressor` protocol (`fit(X, y)`, `to_fit_result()`, `to_surrogate_spec(**kw)`);
-- `get_regressor(SurrogateType)`, which maps `constant_intensity`, `multilinear` and `arima` to their classes.
+- `get_regressor(SurrogateType)`, which in 0.2 maps `constant_intensity` and `multilinear` to their classes and raises
+  `NotImplementedError` for the reserved types.
 
 So the orchestrator never needs to know which kind of regressor it is running.
+
+**Surrogate coverage follows the pinned flex-pse.** D19 is built and tested against the surrogate types the pinned
+flex-pse implements end to end, which in 0.2 means `multilinear` and `constant_intensity`. Nothing in `fitting/` is
+specific to a type. A newly implemented type (ARIMA from U8 first, then quadratic, exponential, neural network) is
+added when the pin moves: bump the SHA, add the type to the test matrix and the docs, and add any `prep` it needs
+(a time-series regressor such as ARIMA needs a regular, gap-free index). A reserved type gives a clear error naming
+the installed flex-pse version.
 
 *1. Data selectors* (JSON, so they work over HTTP). X and y each take one selector, or a list of them, which are
 merged column-wise. Every selector resolves to a list of Acquirium stream references plus a window:
@@ -516,8 +533,9 @@ merged column-wise. Every selector resolves to a list of Acquirium stream refere
 - Python callers can also pass a DataFrame or an Acquirium `Query` directly. The HTTP API accepts only the JSON forms.
 - Selectors reach only the tenant's own Acquirium. Under D14 there is nothing else to reach.
 
-*2. Preparation* (`prep`). flex-pse's `ArimaRegressor.fit` needs a regular, gap-free DatetimeIndex, so the command
-prepares the data first:
+*2. Preparation* (`prep`). The 0.2 regressors drop rows with nulls (and `constant_intensity` also drops zero-flow
+rows), but X and y must still share one index, and time-series regressors added later need a regular, gap-free
+DatetimeIndex. So the command prepares the data first:
 - `align`: `inner` or `outer` join on timestamps; timezones normalised to UTC.
 - `resample`: `{freq, agg}`.
 - `gaps`: `error` (the default), `interpolate` (with a `limit`), or `longest_segment`.
@@ -530,14 +548,24 @@ Every preparation step is recorded with the fit.
 - `regressor` is either a `SurrogateType` name, resolved by the flex-pse hook
   `flex_orchestrator.flexpse:get_regressor`, or an **import string** to any class that follows the `Regressor`
   protocol (user code or a D18 plugin).
-- `params` are the constructor arguments, e.g. `{"order": [0,0,1], "fit_objective": "output_error"}`.
-- `spec_options` are passed to `to_surrogate_spec`, e.g. `{"history_length": "7D"}`.
-- `variants` holds several parameter sets, and `tag` is a template rendered for each, e.g. `"order_{order[2]}"`.
+- `params` are the constructor arguments (none for the 0.2 regressors; ARIMA's `order` once U8 lands).
+- `spec_options` are passed to `to_surrogate_spec`.
+- **Column names and units.** The surrogate's variable names are the column names, so they must be the unit's
+  variable names (`flow_in_feed`, `biogas_volume`); `rename` on a selector maps them. The flex-pse hook passes each
+  column's units to the regressor: to `fit(input_units=, output_units=)` for `multilinear`, and to
+  `to_surrogate_spec(input_units=, output_units=)` for `constant_intensity`. Selector units are QUDT, and surrogate
+  specs need Pyomo unit strings, so the hook converts them with the D3 unit table in reverse (`M3-PER-HR` to
+  `m^3/hr`). A unit with no Pyomo equivalent is an error.
+- `variants` holds several parameter sets, and `tag` is a template rendered for each, e.g. `"biogas_{name}"`. A
+  variant can override `params`, `regressor`, `X`, `y`, `window` and `prep`, so one call can fit, say, the same
+  relation on two seasons of data, or `multilinear` against `constant_intensity`.
   - The data is loaded and prepared **once** in the main process.
   - With `max_workers > 1`, the variants fit in parallel on the tenant's Ray (data shared with `ray.put`, D13).
   - The main process writes all results.
 - `validation`: `{"holdout": "7D"}` gives holdout metrics (RMSE, MAE, MAPE). This is used only if the regressor has
-  `predict`, which the base protocol doesn't require.
+  `predict`, which the base protocol doesn't require and neither 0.2 regressor has. For the 0.2 types the flex-pse
+  hook computes the holdout predictions itself, from the fitted `multilinear` coefficients (intercept plus the sum of
+  coefficient times input) or the `constant_intensity` coefficient (coefficient times input).
 
 *4. What gets stored:*
 - **A surrogate spec** for each variant under its tag in `<s>::specs`. The D9 rules and `on_existing` apply.
@@ -550,27 +578,65 @@ Every preparation step is recorded with the fit.
 
 *5. Fitting and sweeping in one `StudyConfig`:* an optional `fits:` section runs before `sweeps`, so a surrogate sweep
 can refer to tags fitted in the same run. The original pseudocode workflow (fit orders 1–3, then swap each into the
-model and solve) becomes one config, or one `POST /commands/execute_study` request.
+model and solve) becomes one config, or one `POST /commands/execute_study` request. With 0.2 the surrogates are
+`multilinear`; the ARIMA order sweep becomes a `variants` list once U8 lands, with no other change.
 
 ```python
 orch.fit_surrogate(
-    tag="order_{order[2]}", regressor="arima",
-    X={"dataset": "biogas_data", "columns": ["feed_volume"]},
-    y={"resolve": "digester biogas volume", "units": "M3-PER-DAY"},
-    window={"start": "2025-01-01", "end": "2025-06-30"},
+    tag="biogas_{name}", regressor="multilinear",
+    X={"dataset": "biogas_data", "columns": ["feed_volume"], "rename": {"feed_volume": "flow_in_feed"}},
+    y={"resolve": "digester biogas volume", "units": "M3-PER-DAY", "rename": {"*": "biogas_volume"}},
     prep={"resample": {"freq": "1h", "agg": "mean"}, "gaps": "interpolate", "limit": 3},
-    variants=[{"order": [0, 0, q]} for q in (1, 2, 3)],
-    spec_options={"history_length": "7D"},
+    variants=[
+        {"name": "h1", "window": {"start": "2025-01-01", "end": "2025-06-30"}},
+        {"name": "h2", "window": {"start": "2025-07-01", "end": "2025-12-31"}},
+    ],
 )
 ```
 
 ```http
 POST /tenant-a/commands/fit_surrogate            (editor token; body = the same parameters + "study")
 → 202 {"job_id": "…"}
-GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["order_1","order_2","order_3"], "fit_runs": [...], "diagnostics": {...}}}
+GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas_h1","biogas_h2"], "fit_runs": [...], "diagnostics": {...}}}
 ```
 
 **D12 — Python 3.12**, distribution `flex-orchestrator`, import `flex_orchestrator`, src layout, hatchling, pydantic v2.
+
+**D20 — Code style: the same as flex-pse, enforced from the first commit.** **black** formats and **ruff** lints,
+with the same rules and versions as flex-pse (`D:\github\flex-pse\pyproject.toml`, `.pre-commit-config.yaml`). Code
+that moves between the two repos then needs no reformatting.
+
+```toml
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "D"]   # flex-pse's set, plus "D" (see below)
+pydocstyle.convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["D"]
+"examples/**" = ["D"]
+"docs/**" = ["D"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]                  # flex-pse uses py311; D12 fixes 3.12 here
+```
+
+- **One deliberate difference:** flex-pse sets `pydocstyle.convention = "google"` but doesn't select the `D` rules,
+  so its docstrings aren't actually checked. Here `D` is selected for `src/`, because §8 relies on ruff to enforce
+  docstrings on the public API.
+- **Formatter:** black, not `ruff format`, to match flex-pse exactly. Ruff's `I` rule sorts imports, so isort is not
+  needed.
+- **Versions:** the same pre-commit revs as flex-pse (black `26.5.1`, ruff-pre-commit `v0.15.20`), with matching
+  versions pinned in `environment-dev.yml` so the editor, pre-commit and CI agree. They're bumped together with
+  flex-pse, in a PR that does nothing but bump them and reformat.
+- **Enforcement:**
+  - **pre-commit:** black, ruff and import-linter on every commit.
+  - **pre-push:** `ruff check . && black --check . && lint-imports && pytest -q`, the same as flex-pse.
+  - **CI:** the `lint` job runs the same three commands, and every other job depends on it.
+- **Editor:** a committed `.vscode/settings.json` makes black format on save and ruff fix on save, using the
+  `flex-orch-dev` interpreter.
+- **Deliberately not used:** a type checker such as mypy or pyright, because flex-pse doesn't use one. It can be
+  revisited after 0.1.0.
 
 **D13 — Parallel execution: Ray only.** Acquirium already installs Ray (2.59), so the orchestrator supports Ray and
 nothing else: no executor abstraction, no second backend.
@@ -762,27 +828,28 @@ orch = Orchestrator(acquirium_url="http://acquirium:8000", frame="pandas")   # i
 orch.create_study("example_a")            # raises StudyExistsError if present
 orch.select_study("example_a")            # raises StudyNotFoundError if absent
 
-orch.store_data("biogas_data", df, units={"biogas_volume": "m3/day", "feed_volume": "m3/day"})
-X = orch.get_data("biogas_data", columns=["feed_volume"], frame="pandas")
+orch.store_data("biogas_data", df, units={"biogas_volume": "m3/day", "flow_in_feed": "m3/day"})
+X = orch.get_data("biogas_data", columns=["flow_in_feed"], frame="pandas")
 
 orch.store_model_spec("base_model", spec_dict)                         # TagExistsError on repeat
-orch.store_surrogate_spec("order_1", reg.to_surrogate_spec())          # a spec fitted elsewhere, or:
-orch.fit_surrogate(tag="order_{order[2]}", regressor="arima",          # D19: fit from Acquirium data
-                   X={"dataset": "biogas_data", "columns": ["feed_volume"]},
+orch.store_surrogate_spec("biogas_h1", reg.to_surrogate_spec())        # a spec fitted elsewhere, or:
+orch.fit_surrogate(tag="biogas_{name}", regressor="multilinear",       # D19: fit from Acquirium data
+                   X={"dataset": "biogas_data", "columns": ["flow_in_feed"]},
                    y={"dataset": "biogas_data", "columns": ["biogas_volume"]},
-                   variants=[{"order": [0, 0, q]} for q in (1, 2, 3)])
-spec = orch.apply_surrogate("base_model", unit="plant.digester", surrogate="order_1")
-orch.store_model_spec("model_with_surrogate_order_1", spec, parent="base_model")
+                   variants=[{"name": "h1", "window": H1}, {"name": "h2", "window": H2}])
+spec = orch.apply_surrogate("base_model", unit="plant.digester", surrogate="biogas_h1",
+                            relation="biogas_relation")
+orch.store_model_spec("model_with_surrogate_biogas_h1", spec, parent="base_model")
 
 m = my_build(spec); outcome = my_solve(m)                              # user's own build/solve
-orch.store_model_results("model_with_surrogate_order_1", m, outcome, include=["costing.*", "plant.digester.*"])
+orch.store_model_results("model_with_surrogate_biogas_h1", m, outcome, include=["costing.*", "plant.digester.*"])
 
 for r in orch.stored_model_results():                                  # lazy ResultHandles
     df = r.to_frame("polars"); r.tag; r.metadata; r.units
 
 orch.query().where(orch.attr.unit == "KiloW").dataframe()              # native Acquirium query, study-scoped
 orch.runs.where(flexorch_kind="result", status="succeeded").frame()
-orch.delete("result", "model_with_surrogate_order_3")                  # soft delete (tombstone)
+orch.delete("result", "model_with_surrogate_biogas_h2")                  # soft delete (tombstone)
 orch.export_study("exports/example_a")                                 # D17: folder of JSON specs/data/results
 orch.import_study("exports/example_a", name="example_a_copy")
 orch.execute_study(cfg, build=my_build, solve=my_solve, max_workers=8) # Ray (a built-in command)
@@ -796,12 +863,14 @@ Study config:
 ```yaml
 base_model_spec: base_model
 fits:                                    # D19: optional, runs before sweeps
-  - tag: "order_{order[2]}"
-    regressor: arima
-    X: {dataset: biogas_data, columns: [feed_volume]}
+  - tag: "biogas_{name}"
+    regressor: multilinear               # 0.2 types: multilinear, constant_intensity (arima after U8)
+    X: {dataset: biogas_data, columns: [flow_in_feed]}
     y: {dataset: biogas_data, columns: [biogas_volume]}
     prep: {resample: {freq: 1h, agg: mean}, gaps: interpolate, limit: 3}
-    variants: [{order: [0,0,1]}, {order: [0,0,2]}, {order: [0,0,3]}]
+    variants:
+      - {name: h1, window: {start: 2025-01-01, end: 2025-06-30}}
+      - {name: h2, window: {start: 2025-07-01, end: 2025-12-31}}
 hooks:
   build: "mypkg.models:build"
   solve: "mypkg.models:solve"
@@ -809,7 +878,8 @@ hooks:
 sweeps:
   - type: surrogate
     unit: plant.digester
-    surrogates: [order_1, order_2, order_3]
+    relation: biogas_relation
+    surrogates: [biogas_h1, biogas_h2]
   - type: parameter
     path: costing.electricity_price
     values: [0.1, 0.2, 0.3]
@@ -853,11 +923,19 @@ under `examples/` runs from start to finish.
   README, CHANGELOG.
 - `environment-dev.yml` / `environment.yml` (**drafted**, see §6).
 - pytest setup (§7): tier markers, shared fixtures, coverage configuration.
-- pre-commit: ruff (including the Google docstring rules), import-linter (including the rule that nothing imports
-  `server/`). GitHub Actions: lint → unit (3.11–3.13, ubuntu + windows) → component, plus `docs.yml`.
+- Code style per D20:
+  - `[tool.black]` / `[tool.ruff]` in `pyproject.toml`;
+  - `.pre-commit-config.yaml` running black, ruff and import-linter, plus the pre-push suite (import-linter includes
+    the rule that nothing imports `server/`);
+  - `.vscode/settings.json`;
+  - `CONTRIBUTING.md` with the "run it before submitting" rule from flex-pse.
+- GitHub Actions: `lint` (`ruff check .`, `black --check .`, `lint-imports`) → unit (3.11–3.13, ubuntu + windows) →
+  component, plus `docs.yml`.
 - The docs skeleton (§8): `conf.py`, `index.rst` with the flex-pse toctree captions, `_ext/flexorchdoc.py` (an empty
   shell), the `installation` and `architecture_and_layering` pages, and deployment to GitHub Pages.
 - **Exit:** the env builds, `pytest` collects and passes a smoke test, the docs build with `-W`, and CI passes.
+  `pre-commit run --all-files` is clean, and a deliberately misformatted file fails both the hook and the CI `lint`
+  job.
 
 #### M1 — Storage backend, connections, uniqueness, tombstones (≈ 2 wks)
 - The `StorageBackend` protocol, plus the memory and Acquirium backends (D10).
@@ -915,13 +993,16 @@ under `examples/` runs from start to finish.
 - **Regression command (D19):**
   - `fitting/`: the selectors (all six kinds), preparation, regressor resolution (flex-pse `SurrogateType` or an
     import string), `variants`, optional holdout validation;
+  - the surrogate types of the pinned flex-pse only: `multilinear` and `constant_intensity` for 0.2;
   - storing the spec plus a fit run in `<s>::fits` with provenance and the data hash;
   - `fits:` in `StudyConfig`;
   - the `flexpse/regression.py` hook;
   - D17 export and import of `fits/`.
 - **Exit:**
-  - The pseudocode's fit-then-sweep workflow runs as one `StudyConfig`. It fits ARIMA orders 1–3 from a stored
-    dataset, swaps each into the digester and solves.
+  - The pseudocode's fit-then-sweep workflow runs as one `StudyConfig`, with 0.2's `multilinear` surrogates. It
+    fits two variants from a stored dataset, swaps each into the digester's `biogas_relation` and solves. A
+    `constant_intensity` fit of a pump runs in the same config.
+  - ARIMA is **not** an M4 exit criterion. It's a follow-up when U8 lands (see the upstream track).
   - Running it again with the same data gives the same `data_hash` and identical specs.
   - Script 3 runs in-process. `on_existing: skip` does nothing new on a rerun, and `on_existing: error` raises.
   - The sample plugin, installed with pip, loads only when it is in the allowlist. Its command gives the same result
@@ -1011,8 +1092,13 @@ under `examples/` runs from start to finish.
   - The docs cover how an operator adds a tenant, a user and a backup.
 
 #### Upstream track (runs alongside both phases)
-- **U1 (flex-pse):** `emit_model(m) -> ModelConfig`.
-- **U2 (flex-pse):** `UnitConfig.surrogate` → `surrogates: dict[relation, SurrogateSpec]`.
+- ~~**U1 (flex-pse):** `emit_model(m)`~~ — done in flex-pse 0.2.
+- ~~**U2 (flex-pse):** surrogates per relation~~ — done in 0.2 (`surrogate` elements name their relation).
+- **U8 (flex-pse):** upstream the ARIMA regressor from `arima_integration` (`ArimaRegressor`, `get_regressor("arima")`,
+  `to_surrogate_spec(history_length=...)`) and the `ArimaSurrogate` build onto 0.2's flowsheet spec. **Not blocking**:
+  D19 ships with the 0.2 types. When a flex-pse release has it, a follow-up bumps the pin and adds ARIMA (with the
+  gap-free `prep` check and ARMA fixture data) to the D19 test matrix and docs. The same goes for quadratic,
+  exponential and neural-network surrogates as they get implemented.
 - **U3 (Acquirium):** hard delete of studies and runs, cascading to observations, artifacts and streams; a
   `superseded` status for runs; optionally a unique-name flag on `define`. When this lands, `purge` gets implemented.
 - **U4 (Acquirium):** an optional auth hook / API-key middleware, as defence in depth inside the tenant network.
@@ -1031,7 +1117,7 @@ Rough total: **Phase 1 ≈ 15–17 weeks; Phase 2 ≈ 4–5 weeks** (one develop
 
 | File | Env name | Purpose |
 |---|---|---|
-| `environment-dev.yml` | `flex-orch-dev` | Editable installs of the sibling checkouts `../flex-pse` and `../acquirium` (`arima_integration` and the PR #78 branch), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. |
+| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.2.0** from git (upstream `flex-pse/flex-pse`, commit `b3cc361`), an editable install of the sibling checkout `../acquirium` (the PR #78 branch), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
 | `environment.yml` | `flex-orch` | Deployment. flex-pse and Acquirium are pinned to **exact git SHAs**. Used by the M6 image. |
 
 ```bash
@@ -1058,7 +1144,9 @@ Rules:
 ## 7. Testing (pytest, for everything)
 
 Every module ships with tests in the same PR. Coverage is enforced in CI: an 85% floor at M1, raised to 90% from M4
-on. `tests/` mirrors `src/flex_orchestrator/`.
+on. Tests live next to the code they test, in a `tests/` folder inside each package
+(`src/flex_orchestrator/tests/`, `src/flex_orchestrator/flexpse/tests/`, ...), so a module's tests are easy to
+find and review. This differs from flex-pse on purpose.
 
 **Tiers** (each test carries exactly one marker, enforced in `conftest.py` as in flex-pse):
 - `unit`: no database, no solver. Uses the memory backend, fake hooks, and Pyomo models that are built but never
@@ -1071,7 +1159,7 @@ on. `tests/` mirrors `src/flex_orchestrator/`.
   provider.
 - `benchmark` (opt-in): the D5 and M5 load tests.
 
-**Shared fixtures (`tests/conftest.py`)**
+**Shared fixtures (the repo-root `conftest.py`, plus a `conftest.py` in a package's `tests/` for fixtures only it uses)**
 - `memory_backend`, `acquirium_local` (session-scoped, with a fresh study per test), and `orch` (parametrised over
   both backends).
 - `toy_pyomo_model`, covering:
@@ -1083,6 +1171,14 @@ on. `tests/` mirrors `src/flex_orchestrator/`.
   - one Var without units.
 - `flexpse_digester_model`: built from flex-pse's `api_freeze` fixtures; skipped if flex-pse isn't installed.
 - `fake_hooks`, and `frame_kind` (`polars` or `pandas`).
+- `surrogate_case`: parametrised over the surrogate types the **pinned flex-pse implements** (0.2: `multilinear` and
+  `constant_intensity`). Each case carries a spec, the unit and relation it targets, the regressor that fits it,
+  synthetic data with known coefficients, and the expected solved value.
+
+**Surrogate coverage rule.** Tests use only surrogate types that work in the pinned flex-pse. A tripwire test asserts
+that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` in 0.2) still raises
+`NotImplementedError`. When a pin bump implements one, the tripwire fails, and that PR moves the type into
+`surrogate_case` (with a regressor and data) and into the docs.
 - `two_tenants` (integration): provisions tenants A and B with `deploy/tenant/`, and tears them down afterwards.
 
 **What each area tests**
@@ -1098,7 +1194,7 @@ on. `tests/` mirrors `src/flex_orchestrator/`.
 | Connection / credentials (D11) | mode selection and conflicting arguments; DSN escaping (`@:/%` in passwords); precedence between `*_FILE`, `FLEXORCH_*`, `PG*` and `.pgpass`; the DSN reaches the child process only through the environment, and the toml contains no `pg_dsn`; a **redaction test** that searches logs, exceptions, `server.log` and metadata for the password; a wrong password → `DBAuthError`; preflight failures; a second managed server is refused; `recreate` is rejected. |
 | Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from `toy_pyomo_model`; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; tombstones are only exported with `include_deleted`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
 | Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. **Server (Phase 2):** every route under `/ext/<plugin>` returns 401 with no token and 403 with another tenant's token, **checked by walking every route the app registers**, so a new plugin route can't escape the check; the role in `@command(role=...)` is enforced on `/commands/{name}`; reserved prefixes are protected; plugin OpenAPI tags appear in the generated client; `create_app` is pure (two apps with different plugins don't affect each other); the isolation suite passes with a hostile plugin enabled. |
-| Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** ARIMA, multilinear and constant-intensity through `get_regressor`; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic ARMA data with known coefficients. |
+| Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** `multilinear` and `constant_intensity` through `get_regressor` (the 0.2 types; the matrix grows with the pin); a reserved type gives a clear error naming the flex-pse version; QUDT to Pyomo conversion of column units, and an unmappable unit is an error; the hook's holdout metrics match a hand computation; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic linear data with known coefficients (ARMA data is added with U8). |
 | Hooks (D1) | callable, registered-name and import-string resolution; a bad import string gives a clear error; `SolveOutcome` failure handling. |
 | Specs | canonical hashing is stable across dict ordering; `apply_surrogate`; overrides. |
 | Frames (D7) | polars ↔ pandas, DatetimeIndex restored, dtypes kept. |
@@ -1216,7 +1312,10 @@ small):
 - **Branching:** trunk-based on `main`. Short-lived `feat/…` and `fix/…` branches, squash-merged. Each PR is one
   milestone task and includes its tests.
 - **PR checklist:** tests in the right tier; coverage floor met; docs or an example updated; a CHANGELOG entry; no
-  layering violations (especially no HTTP in the core library).
+  layering violations (especially no HTTP in the core library); `ruff check .` and `black --check .` are clean (D20).
+- **Code style:** black and ruff exactly as in flex-pse (D20). Install the hooks once with
+  `pre-commit install --hook-type pre-commit --hook-type pre-push`. Never use `--no-verify` to get a commit through.
+  PRs that only reformat stay separate from PRs that change behaviour.
 - **Security review:** any PR that touches `connection.py`, `settings.py`, `deploy/tenant/` or `server/auth.py` needs
   a second reviewer, and must keep the isolation suite and the redaction test passing.
 - **Extension API changes:** any change to `ext/`, `testing/` or `server/deps.py` updates `PLUGIN_API_VERSION`

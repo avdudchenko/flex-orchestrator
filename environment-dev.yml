@@ -1,7 +1,8 @@
 # Development environment for flex-orchestrator.
-# Installs the sibling checkouts ../flex-pse and ../acquirium in editable mode so
-# upstream changes (flex-pse `arima_integration`, Acquirium PR #78) are picked up
-# without reinstalling. Binary solvers come from conda-forge; run
+# flex-pse is the v0.2.0 release from git; to co-develop it, swap that line for
+# `-e ../flex-pse[parameterize,solvers,testing]`. The sibling ../acquirium checkout
+# is installed editable so Acquirium PR #78 changes are picked up without
+# reinstalling. Binary solvers come from conda-forge; run
 # `idaes get-extensions` after creation for IPOPT.
 # Usage: conda env create -f environment-dev.yml
 name: flex-orch-dev
@@ -17,7 +18,9 @@ dependencies:
   - pytest-cov
   - pytest-timeout
   - pytest-xdist
-  - ruff
+  # code style (D20): same versions as flex-pse's .pre-commit-config.yaml
+  - black=26.5.1
+  - ruff=0.15.20
   - pre-commit
   - import-linter
   - ipykernel
@@ -26,9 +29,10 @@ dependencies:
   - myst-parser
   - furo
   - pip:
-      - -e ../flex-pse[parameterize,solvers,testing]
+      # flex-pse v0.2.0 (flowsheet spec schema 0.1.0). The tag's dist-info still says 0.1.0.
+      - "flex-pse[parameterize,solvers,testing] @ git+https://github.com/flex-pse/flex-pse.git@v0.2.0"
       - -e ../acquirium
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
       - httpx
       # parallel execution (D13) uses ray, which already comes with acquirium
-      # - -e .[dev,server]   # enable once M0 adds pyproject.toml
+      - -e .[dev]   # add the server extra in M7
