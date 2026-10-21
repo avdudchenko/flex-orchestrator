@@ -39,3 +39,31 @@ class ExportError(FlexOrchestratorError):
 
 class UnitError(FlexOrchestratorError):
     """A unit can't be mapped to QUDT (in strict mode) or converted."""
+
+
+class StorageError(FlexOrchestratorError):
+    """The storage backend refused a write or read (PLAN.md D10).
+
+    Raised for a label already declared with another kind, a write to a run
+    that isn't running, a timeseries without datetimes, and errors reported by
+    Acquirium.
+    """
+
+
+class StudyExistsError(FlexOrchestratorError):
+    """``create_study`` was given the name of a study that exists (PLAN.md D9)."""
+
+
+class StudyNotFoundError(FlexOrchestratorError, LookupError):
+    """The study doesn't exist, or no study is selected (PLAN.md D9)."""
+
+
+class TagExistsError(FlexOrchestratorError):
+    """An item with this kind and tag is already stored in the study (PLAN.md D9).
+
+    A run that failed doesn't count, so a failed tag can be stored again.
+    """
+
+
+class TagNotFoundError(FlexOrchestratorError, LookupError):
+    """Nothing is stored in the study under this kind and tag."""

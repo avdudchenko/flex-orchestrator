@@ -26,6 +26,21 @@
   (`flex_orchestrator.flexpse.time_sets`) registers the TimeBlock's time
   set plus the `startup` / `shutdown` index sets, so those export as
   timeseries.
+- Explicit results API (PLAN.md D4): `Orchestrator` with `create_study` /
+  `select_study` / `get_or_create_study` (D9 guards),
+  `store_model_results(tag, model, outcome, keys, include, exclude)`,
+  `solve_and_store(tag, model, ...)` and `model_results(tag)`, returning
+  `StoredResult`. A tag is stored once; a result whose solve wasn't `ok` is a
+  `failed` run holding only its outcome, so the tag can be retried.
+- Storage backends (PLAN.md D10): the `StorageBackend` contract,
+  `MemoryBackend` and `AcquiriumBackend`, and the D3 step 4 writer
+  (`flex_orchestrator.results`): only verified QUDT units are declared, the
+  Pyomo unit, component and index go in variable metadata, and later runs are
+  converted to a label's declared unit. New `StorageError`,
+  `StudyExistsError`, `StudyNotFoundError`, `TagExistsError` and
+  `TagNotFoundError`; new `acquirium` extra.
+- The flex-pse `time_sets` hook returns `[]` for a model without exactly one
+  TimeBlock, so user models store through the default hooks.
 - `flex_orchestrator.testing`: fake hooks for tests without a solver, and the
   shared flex-pse specs tests build models from: `DEMO_SPEC`, plus
   `LOGIC_SPEC`, `SURROGATE_DISPATCH_SPEC` and `NETWORK_SPEC` emitted from

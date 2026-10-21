@@ -88,3 +88,94 @@ def demo_model(demo_spec):
     from flex_orchestrator.flexpse import build
 
     return build(demo_spec)
+
+
+def _build(spec):
+    pytest.importorskip("flexops")
+    from flex_orchestrator.flexpse import build
+
+    return build(copy.deepcopy(spec))
+
+
+@pytest.fixture
+def logic_model():
+    """flex-pse's indexed RO trains ``p.ro[0..2]`` over ``p.trains = [0, 1, 2]``.
+
+    ``p.trains`` holds valid time positions but isn't time (a decoy), and each
+    train's ``startup`` / ``shutdown`` is indexed over every time point but the
+    first, by an anonymous Set (a real subset of time).
+    """
+    from flex_orchestrator.testing import LOGIC_SPEC
+
+    return _build(LOGIC_SPEC)
+
+
+@pytest.fixture
+def surrogate_model():
+    """A pump surrogate's ``coefficient_vars`` and a battery with fixed dispatch."""
+    from flex_orchestrator.testing import SURROGATE_DISPATCH_SPEC
+
+    return _build(SURROGATE_DISPATCH_SPEC)
+
+
+@pytest.fixture
+def network_model():
+    """Paths through a network of two plants."""
+    from flex_orchestrator.testing import NETWORK_SPEC
+
+    return _build(NETWORK_SPEC)
+
+
+@pytest.fixture
+def memory_backend():
+    """An empty in-memory backend."""
+    from flex_orchestrator.backend import MemoryBackend
+
+    return MemoryBackend()
+
+
+@pytest.fixture(scope="session")
+def acquirium_local(tmp_path_factory):
+    """A local Acquirium (DuckDB) for the whole session; tests use fresh studies.
+
+    Starting the server takes about half a minute, so it is started once.
+    """
+    aq = pytest.importorskip("acquirium")
+    client = aq.init(
+        data_dir=tmp_path_factory.mktemp("acquirium"), exact_only=True, timeout=300
+    )
+    yield client
+    aq.shutdown()
+
+
+@pytest.fixture(
+    params=[
+        pytest.param("memory", marks=pytest.mark.unit),
+        pytest.param("acquirium", marks=pytest.mark.component),
+    ]
+)
+def backend(request):
+    """Each backend in turn: memory (unit tier) and Acquirium (component tier)."""
+    if request.param == "memory":
+        return request.getfixturevalue("memory_backend")
+    from flex_orchestrator.backend import AcquiriumBackend
+
+    return AcquiriumBackend(request.getfixturevalue("acquirium_local"))
+
+
+@pytest.fixture
+def study_name():
+    """A study name no other test uses (the Acquirium server is shared)."""
+    import uuid
+
+    return f"study-{uuid.uuid4().hex[:12]}"
+
+
+@pytest.fixture
+def orch(backend, study_name):
+    """An orchestrator on each backend, with a fresh study selected."""
+    from flex_orchestrator.orchestrator import Orchestrator
+
+    orchestrator = Orchestrator(backend)
+    orchestrator.create_study(study_name)
+    return orchestrator

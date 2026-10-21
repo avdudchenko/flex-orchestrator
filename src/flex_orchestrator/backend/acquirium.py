@@ -1,0 +1,202 @@
+"""The Acquirium backend: the storage contract on Acquirium's study API.
+
+This is the only module that talks to Acquirium (PLAN.md §3). It takes a
+connected client, so how the client was started (a local server, a Postgres
+one, or a remote tenant stack: PLAN.md D11) doesn't matter here.
+
+Acquirium allows one active run per ``Study`` object, so each run gets its own
+``Study`` handle, kept until the run ends. Declarations and reads go through
+one cached handle per study.
+"""
+
+from collections.abc import Callable, Mapping
+from typing import Any
+
+import requests
+
+from flex_orchestrator.backend.base import (
+    Record,
+    Role,
+    Run,
+    RunStatus,
+    Variable,
+    VariableKind,
+    to_utc,
+)
+from flex_orchestrator.errors import StorageError
+
+
+class AcquiriumBackend:
+    """Stores studies, variables and runs in Acquirium.
+
+    Args:
+        acquirium: A connected Acquirium client, e.g. from
+            ``acquirium.init(data_dir=...)``.
+
+    Attributes:
+        acquirium: The client.
+        resolve_unit: Acquirium's QUDT lookup, so the exporter verifies every
+            unit key against the store's own vocabulary.
+
+    Example:
+        >>> import acquirium as aq  # doctest: +SKIP
+        >>> backend = AcquiriumBackend(aq.init(data_dir=".flexorch"))  # doctest: +SKIP
+    """
+
+    def __init__(self, acquirium: Any) -> None:
+        """Wrap a connected Acquirium client."""
+        self.acquirium = acquirium
+        self.resolve_unit: Callable[[str], Mapping[str, Any]] = (
+            acquirium.client.resolve_unit
+        )
+        self._studies: dict[str, Any] = {}
+        self._active: dict[str, Any] = {}
+
+    def define_study(self, name: str) -> None:
+        """Create the study if it doesn't exist."""
+        self._studies[name] = _call(self.acquirium.study.define, name)
+
+    def has_study(self, name: str) -> bool:
+        """Return whether the study exists."""
+        if name in self._studies:
+            return True
+        try:
+            self._studies[name] = self.acquirium.study.get(name)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return False
+            raise StorageError(f"Acquirium: {exc}") from exc
+        return True
+
+    def variable(self, study: str, label: str) -> Variable | None:
+        """Return the declaration of ``label``, or ``None``."""
+        found = self._study(study).variables.get(label)
+        return None if found is None else _variable(found)
+
+    def declare(
+        self,
+        study: str,
+        label: str,
+        *,
+        role: Role,
+        kind: VariableKind,
+        unit: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Variable:
+        """Declare a variable, or return it if declared the same way.
+
+        Raises:
+            StorageError: If ``label`` is declared differently, or Acquirium
+                can't resolve ``unit``.
+        """
+        builder = getattr(self._study(study), role)(label)
+        metadata = dict(metadata or {})
+        if kind == "json":
+            if unit is not None:
+                raise StorageError(f"JSON variable {label!r} can't have a unit.")
+            declared = _call(builder.json, **metadata)
+        else:
+            declared = _call(getattr(builder, kind), unit=unit, **metadata)
+        return _variable(declared)
+
+    def start_run(self, study: str, metadata: Mapping[str, Any]) -> str:
+        """Start a run and return its id."""
+        handle = _call(self.acquirium.study.get, study)
+        run = _call(handle.start, dict(metadata))
+        self._active[run.run_id] = run
+        return run.run_id
+
+    def record(self, run_id: str, label: str, value: Any) -> None:
+        """Record a value in a running run.
+
+        Raises:
+            StorageError: If the run isn't running here, ``label`` isn't
+                declared, or Acquirium rejects the value.
+        """
+        run = self._running(run_id)
+        variable = run.study.variables.get(label)
+        if variable is None:
+            raise StorageError(f"Variable {label!r} isn't declared.")
+        _call(variable.record, value)
+
+    def finish_run(self, run_id: str) -> None:
+        """Mark a running run ``succeeded``."""
+        _call(self._running(run_id).finish)
+        del self._active[run_id]
+
+    def fail_run(self, run_id: str, error: BaseException) -> None:
+        """Mark a running run ``failed``."""
+        _call(self._running(run_id).fail, error)
+        del self._active[run_id]
+
+    def runs(
+        self,
+        study: str,
+        *,
+        status: RunStatus | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> list[Run]:
+        """Return the study's runs, oldest first."""
+        # metadata= is an exact-match filter in SQL; **attrs would need the graph.
+        selected = self._study(study).experiments.where(
+            status=status, metadata=dict(metadata) if metadata else None
+        )
+        found = [
+            Run(r.run_id, r.status, dict(r.metadata), r.started_at, r.error)
+            for r in _call(selected.all)
+        ]
+        return sorted(found, key=lambda run: run.started_at)
+
+    def records(self, study: str, run_id: str) -> list[Record]:
+        """Return what a run recorded, in the order it was recorded."""
+        handle = self._study(study)
+        try:
+            run = handle.experiments.get(run_id)
+        except (KeyError, requests.HTTPError) as exc:
+            raise StorageError(f"Study {study!r} has no run {run_id!r}.") from exc
+        found = []
+        for observation in _call(run.observations().all):
+            variable = observation.variable
+            if variable.kind == "timeseries":
+                frame = _call(handle.client.timeseries_df, observation.ref_uri)
+                rows = [
+                    (to_utc(when), value)
+                    for when, value in zip(
+                        frame["ts"].to_list(), frame["value"].to_list(), strict=True
+                    )
+                ]
+                found.append(Record(variable.label, "timeseries", rows=rows))
+            else:
+                found.append(Record(variable.label, variable.kind, observation.value))
+        return found
+
+    def _study(self, name: str) -> Any:
+        if name not in self._studies:
+            self._studies[name] = _call(self.acquirium.study.get, name)
+        return self._studies[name]
+
+    def _running(self, run_id: str) -> Any:
+        try:
+            return self._active[run_id]
+        except KeyError:
+            raise StorageError(
+                f"Run {run_id!r} isn't running in this session."
+            ) from None
+
+
+def _variable(declared: Any) -> Variable:
+    metadata = dict(declared.metadata)
+    unit = metadata.pop("unit", None)
+    metadata.pop("observed", None)
+    return Variable(declared.label, declared.role, declared.kind, unit, metadata)
+
+
+def _call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Call into Acquirium, turning its HTTP and value errors into StorageError."""
+    try:
+        return fn(*args, **kwargs)
+    except requests.HTTPError as exc:
+        detail = exc.response.text if exc.response is not None else str(exc)
+        raise StorageError(f"Acquirium: {detail}") from exc
+    except (requests.RequestException, ValueError, RuntimeError) as exc:
+        raise StorageError(f"Acquirium: {exc}") from exc

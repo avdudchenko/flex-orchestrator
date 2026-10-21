@@ -40,3 +40,18 @@ forbidden_modules =
     flexops
     flexparameterize
     acquirium
+
+[importlinter:contract:acquirium-only-in-backend]
+name = only backend.acquirium talks to Acquirium; the orchestrator uses hooks, not flex-pse
+type = forbidden
+source_modules =
+    flex_orchestrator.orchestrator
+    flex_orchestrator.results
+    flex_orchestrator.backend.base
+    flex_orchestrator.backend.memory
+forbidden_modules =
+    acquirium
+    requests
+    flexcore
+    flexops
+    flexparameterize

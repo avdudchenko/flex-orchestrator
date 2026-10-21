@@ -15,6 +15,8 @@ dependencies = [
 # flex-pse is not on PyPI yet: the conda env files install it from a pinned git
 # SHA (deployment) or the sibling checkout (development) before this package.
 flexpse = ["flex-pse[parameterize,solvers]"]
+# The Acquirium backend; Acquirium (PR #78) is installed the same way as flex-pse.
+acquirium = ["acquirium", "requests"]
 dev = [
     "pytest",
     "pytest-cov",

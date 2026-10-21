@@ -7,6 +7,11 @@ from flex_orchestrator.errors import (
     FlexOrchestratorError,
     HookError,
     SpecError,
+    StorageError,
+    StudyExistsError,
+    StudyNotFoundError,
+    TagExistsError,
+    TagNotFoundError,
     UnitError,
 )
 from flex_orchestrator.hooks import (
@@ -26,12 +31,19 @@ from flex_orchestrator.specs import SpecRecord, canonical_json, spec_hash, to_js
 __version__ = _dist_version("flex-orchestrator")
 
 
-def __getattr__(name):
-    # The exporter needs pyomo; import it only when it is asked for.
-    if name == "export_model_data":
-        from flex_orchestrator.export import export_model_data
+_LAZY = {
+    "export_model_data": "flex_orchestrator.export",
+    "Orchestrator": "flex_orchestrator.orchestrator",
+    "StoredResult": "flex_orchestrator.orchestrator",
+}
 
-        return export_model_data
+
+def __getattr__(name):
+    # These need pyomo; import them only when they are asked for.
+    if name in _LAZY:
+        import importlib
+
+        return getattr(importlib.import_module(_LAZY[name]), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -44,11 +56,18 @@ __all__ = [
     "HookError",
     "HookRegistry",
     "HookSet",
+    "Orchestrator",
     "SolveFn",
     "SolveOutcome",
     "SpecError",
     "SpecRecord",
+    "StorageError",
+    "StoredResult",
+    "StudyExistsError",
+    "StudyNotFoundError",
     "SwapSurrogateFn",
+    "TagExistsError",
+    "TagNotFoundError",
     "TimeSetsFn",
     "UnitError",
     "canonical_json",

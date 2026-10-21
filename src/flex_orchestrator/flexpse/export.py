@@ -1,6 +1,7 @@
 """The flex-pse ``time_sets`` hook: which Sets of a built model are time."""
 
 import pyomo.environ as pyo
+from flexcore.exceptions import FlexConfigError
 from flexops.core.time_block import find_time_block
 
 _TIME_SUBSET_VARS = ("startup", "shutdown")
@@ -22,16 +23,17 @@ def time_sets(model: pyo.Block) -> list[pyo.Set]:
         model: A built flex-pse model.
 
     Returns:
-        The time Sets, main one first.
-
-    Raises:
-        flexcore.exceptions.FlexConfigError: If the model has no TimeBlock, or
-            several.
+        The time Sets, main one first, or ``[]`` if the model doesn't have
+        exactly one TimeBlock (a user's own model, say). The exporter then finds
+        time itself, and reports several TimeBlocks as ambiguous.
 
     Example:
         >>> export_model_data(model, time_sets=time_sets(model))  # doctest: +SKIP
     """
-    time_index = find_time_block(model).time_index
+    try:
+        time_index = find_time_block(model).time_index
+    except FlexConfigError:
+        return []
     found = [time_index]
     times = set(time_index)
     for block in model.block_data_objects(active=True, descend_into=True):

@@ -284,6 +284,36 @@ be tested without a database.
 - `orch.solve_and_store(tag, model)`
 - The orchestrator never relies on an implied "current model".
 
+**Built** in `flex_orchestrator.orchestrator` (the facade), `flex_orchestrator.results` (the D3 step 4 writer) and
+`flex_orchestrator.backend` (the contract, memory and Acquirium backends), ahead of the rest of M1. What the build
+settled:
+- **Signatures:** `Orchestrator(backend, *, study=None, hooks=None, registry=None, unit_mapper=None,
+  strict_units=False)`; `store_model_results(tag, model, outcome=None, keys=None, include=None, exclude=None, *,
+  time_sets=None, datetime_index=None) -> StoredResult(tag, run_id, status, outcome, keys)`;
+  `solve_and_store(tag, model, keys, include, exclude, *, solve=None, time_sets=None, datetime_index=None,
+  **options)`; `model_results(tag) -> ModelData` (read back; frames come with D7). The D11 connection modes
+  arrive in M1, so for now the backend is passed in.
+- **Order of a store:** check the tag → export → check every value against the study's declarations (kind, unit
+  conversion, datetimes) → declare what's new → start the run → record → finish. Anything that can't be stored
+  fails *before* a run starts. A write that fails part-way marks the run `failed` and re-raises.
+- **Failed solves:** an outcome that isn't `ok` is stored as a `failed` run holding only `solve_outcome`, so the
+  tag can be retried (D9). `solve_and_store` checks the tag before solving and turns a raising solve into an
+  `error` outcome (`run_solve`).
+- **Units on Acquirium:** Acquirium rejects a declared unit it can't resolve (`CCY_USD-PER-YR` → 400), so only
+  verified QUDT keys are declared. `pyomo_unit`, `component` and `index` (a JSON string, since Acquirium flattens
+  list metadata into dotted keys) are variable metadata. A label keeps its first declaration: Acquirium compares
+  re-declarations literally, so the writer never re-declares; later runs are converted to the declared
+  `pyomo_unit` with `conversion_factor`, and a mismatch in dimensions raises `UnitError`.
+- **Time:** the default `time_sets` hook is applied, so flex-pse `startup` / `shutdown` store as timeseries. It
+  returns `[]` for a model without one TimeBlock, and is skipped if flex-pse isn't installed. A timeseries
+  without datetimes (a user model with no `datetime_index=`) is a `StorageError` naming the fix. Timestamps are
+  stored and read back as UTC.
+- **Acquirium specifics:** one active run per `Study` handle, so each run gets its own handle; run lookup uses
+  the SQL `metadata=` filter, not the graph; NaN is rejected by Acquirium's client, which the exporter already
+  turns into `None`.
+- **Not yet:** the D9 post-write duplicate check and `replace=True` need tombstones (M1); run inputs
+  (`model_spec_ref`, `overrides`) come with spec storage (M1).
+
 **D5 — No parquet; everything is stored natively in Acquirium.**
 - Every exported value becomes an Acquirium output variable (timeseries or scalar).
 - `store_data` input becomes Acquirium timeseries streams.
@@ -349,6 +379,7 @@ selection rather than adding a separate file store.
 
 | Acquirium Study | One run = | Variables |
 |---|---|---|
+| `<s>` | — (the study itself; created by `create_study`) | none yet |
 | `<s>::data` | one `store_data` call | `manifest` (`.json`) plus one `.timeseries(unit=)` per column |
 | `<s>::specs` | one `store_model_spec` / `store_surrogate_spec` call | `spec` (`.json`); metadata `{flexorch_kind, flexorch_tag, spec_hash, parent_tag, spec_format}` |
 | `<s>::runs` | one model solve | inputs `model_spec_ref` (`.json`), `overrides` (`.json`); outputs = exported model keys (D3), `solve_outcome` (`.json`); log `solver events` |
@@ -841,6 +872,7 @@ what they need:
 src/flex_orchestrator/
   __init__.py            # Orchestrator, StudyConfig, export_model_data
   orchestrator.py        # facade: studies, store/get, results, query passthrough
+  results.py             # D3 step 4 writer: ModelData -> declarations + run records, and read back
   errors.py              # StudyExistsError, StudyNotFoundError, TagExistsError, UnitError, DBAuthError, ...
   connection.py          # D11 modes: local / postgres / remote; DSN building, preflight, server lock
   settings.py            # pydantic-settings: FLEXORCH_* env, *_FILE secrets, SecretStr, redaction
@@ -1022,7 +1054,8 @@ under `examples/` runs from start to finish.
   job.
 
 #### M1 — Storage backend, connections, uniqueness, tombstones (≈ 2 wks)
-- The `StorageBackend` protocol, plus the memory and Acquirium backends (D10).
+- The `StorageBackend` protocol, plus the memory and Acquirium backends (D10). **Built** for runs, variables and
+  results (D4); M1 adds what specs, data and tombstones need.
 - `connection.py` / `settings.py` (D11):
   - the three modes, with credentials from env or secret file and `SecretStr`;
   - checks before starting, and the server lock;
@@ -1045,7 +1078,8 @@ under `examples/` runs from start to finish.
 - `export.walker`: key and pattern selection, identity-based time-set detection, product sets split into time and
   custom factors, and `name[idx]` scalars.
 - `export.units`: the mapping table, resolver fallback, overrides, strict mode, and converting to the declared unit.
-- The writer (D3 step 4). `store_model_results`, `stored_model_results`, and `ResultHandle.to_frame/to_pandas/to_polars`.
+- The writer (D3 step 4), `store_model_results` and `solve_and_store`: **built** (D4). Still to do:
+  `stored_model_results` and `ResultHandle.to_frame/to_pandas/to_polars` (on `model_results`).
 - Default flex-pse hooks and `SolveOutcome`.
 - The D5 benchmark.
 - **Exit:** scripts 1 and 2 run with the flex-pse hooks and with a user-written build/solve pair. Units round-trip.
@@ -1256,8 +1290,11 @@ find and review. This differs from flex-pse on purpose.
 - `benchmark` (opt-in): the D5 and M5 load tests.
 
 **Shared fixtures (the repo-root `conftest.py`, plus a `conftest.py` in a package's `tests/` for fixtures only it uses)**
-- `memory_backend`, `acquirium_local` (session-scoped, with a fresh study per test), and `orch` (parametrised over
-  both backends).
+- `memory_backend`, `acquirium_local` (session-scoped: one local DuckDB Acquirium per session, since it takes about
+  30 s to start), `study_name` (a fresh name per test), `backend` (parametrised: memory in the unit tier, Acquirium
+  in the component tier) and `orch` (an orchestrator on `backend` with a fresh study). The backend contract suite
+  and the results round-trip use `backend` / `orch`, so the memory backend can't drift from Acquirium.
+- `logic_model`, `surrogate_model`, `network_model`: the corpus specs below, built (repo-root conftest).
 - **Tests on Pyomo models use flex-pse models.** `flex_orchestrator.testing.DEMO_SPEC`, the six-hour flex-pse 0.2
   demo flowsheet, is the shared spec. The repo-root `demo_spec` fixture is a copy of it, and `demo_model` is it
   built with the default build hook (skipped without flex-pse). So tests exercise flex-pse's real `TimeBlock`,
