@@ -15,13 +15,20 @@ dependencies:
   # dev tooling
   - pytest
   - pytest-cov
+  - pytest-timeout
+  - pytest-xdist
   - ruff
   - pre-commit
   - import-linter
   - ipykernel
+  # docs (same stack as flex-pse)
+  - sphinx
+  - myst-parser
+  - furo
   - pip:
       - -e ../flex-pse[parameterize,solvers,testing]
       - -e ../acquirium
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
       - httpx
+      # parallel execution (D13) uses ray, which already comes with acquirium
       # - -e .[dev,server]   # enable once M0 adds pyproject.toml
