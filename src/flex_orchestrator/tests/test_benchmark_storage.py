@@ -1,11 +1,12 @@
 """The D5 storage benchmark: how long one model's results take to store (opt-in).
 
-Every exported value is its own Acquirium stream or scalar (PLAN.md D5). The
-models we run cover at most a month at 15-minute steps (31 x 96 = 2,976
-points), with up to a few hundred keys, so this stores one model of that shape
-with 10, 100 and 1,000 timeseries keys, plus 10 scalars. Each size is stored
-twice: the first save declares every variable, the second reuses them (every
-later run of a study).
+A result is stored as one snapshot: a ``table`` of every timeseries plus a JSON
+manifest (PLAN.md D5). The models we run cover at most a month at 15-minute
+steps (31 x 96 = 2,976 points), with up to a few hundred keys, so this stores
+one model of that shape with 10, 100 and 1,000 timeseries keys, plus 10
+scalars. Each size is stored twice: the first save declares the variables, the
+second reuses them (every later run of a study). A separate case times 10 keys
+stored natively as well (``streams=``).
 
 Run it with ``pytest -m benchmark -s``. ``FLEXORCH_BENCH_STEPS`` changes the
 points per key, and ``FLEXORCH_BENCH_MAX_S`` sets a limit on one save, which is
@@ -96,3 +97,18 @@ def test_store_one_model(acquirium_local, study_name, keys):
     )
     if MAX_S is not None:
         assert max(timings) <= float(MAX_S)
+
+
+def test_store_with_native_streams(acquirium_local, study_name):
+    from flex_orchestrator.backend import AcquiriumBackend
+    from flex_orchestrator.orchestrator import Orchestrator
+
+    orch = Orchestrator(AcquiriumBackend(acquirium_local))
+    orch.create_study(study_name)
+    data = synthetic(100, 0)
+    streams = [f"plant.unit{k}.power" for k in range(10)]
+    start = time.perf_counter()
+    stored = orch.store_model_data("run0", data, streams=streams)
+    took = time.perf_counter() - start
+    assert stored.streams == streams
+    print(f"\n  100 keys in the snapshot, 10 also native: save {took:6.1f} s")

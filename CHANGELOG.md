@@ -48,6 +48,15 @@
   are now dependencies.
 - `Orchestrator.store_model_data(tag, data, outcome)` stores values that are
   already exported.
+- Results are stored as a snapshot (PLAN.md D5): a `model_values` table
+  (Parquet, through Acquirium's `table` kind) and a `model_manifest` JSON.
+  `streams=` on `store_model_results` / `store_model_data` /
+  `solve_and_store` also stores chosen keys as native variables, and
+  `model_results(tag, units=)` converts with pint. `StoredResult.streams`.
+- Storage contract: the `table` kind; a timeseries sample must have a value
+  (missing values are left out). The Acquirium backend declares units as QUDT
+  URIs.
+- Acquirium pin moved to PR #78 `9a70a1f`.
 - Storage contract: `variables(study)` and `records(..., labels=)`.
 - An opt-in `benchmark` tier (`pytest -m benchmark -s`) with the D5 storage
   benchmark.

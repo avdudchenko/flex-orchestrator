@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import polars as pl
+
 from flex_orchestrator.backend.base import (
     Record,
     Role,
@@ -77,11 +79,11 @@ class MemoryBackend:
         """Declare a variable, or return it if declared the same way.
 
         Raises:
-            StorageError: If ``label`` is declared differently, or a JSON
-                variable is given a unit.
+            StorageError: If ``label`` is declared differently, or a JSON or
+                table variable is given a unit.
         """
-        if kind == "json" and unit is not None:
-            raise StorageError(f"JSON variable {label!r} can't have a unit.")
+        if kind in ("json", "table") and unit is not None:
+            raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
         # Like Acquirium, None-valued metadata isn't kept.
         kept = {k: v for k, v in (metadata or {}).items() if v is not None}
         wanted = Variable(label, role, kind, unit, copy.deepcopy(kept))
@@ -107,7 +109,9 @@ class MemoryBackend:
 
         Raises:
             StorageError: If the run isn't running, ``label`` isn't declared, or
-                the value isn't JSON (NaN included).
+                the value doesn't fit the kind: a timeseries row without a
+                value, a table that isn't a polars DataFrame, or a value that
+                isn't JSON (NaN included).
         """
         entry = self._running(run_id)
         variable = self.variable(entry.study, label)
@@ -115,8 +119,14 @@ class MemoryBackend:
             raise StorageError(f"Variable {label!r} isn't declared.")
         if variable.kind == "timeseries":
             rows = sorted(((to_utc(when), v) for when, v in value), key=lambda r: r[0])
+            if any(v is None for _, v in rows):
+                raise StorageError(f"Timeseries {label!r} has a row without a value.")
             self._check_json([v for _, v in rows])
             entry.records[label] = Record(label, "timeseries", rows=rows)
+        elif variable.kind == "table":
+            if not isinstance(value, pl.DataFrame):
+                raise StorageError(f"Table {label!r} records a polars DataFrame.")
+            entry.records[label] = Record(label, "table", value.clone())
         else:
             self._check_json(value)
             entry.records[label] = Record(label, variable.kind, copy.deepcopy(value))

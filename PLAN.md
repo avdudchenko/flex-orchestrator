@@ -33,7 +33,7 @@ This document is the plan only. No orchestrator code has been written yet.
 
 | Piece | Where | Status / notes |
 |---|---|---|
-| Study / experiment ledger | Acquirium PR #78 (`experiment-interface`, `a74b3bc`): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .timeseries(unit=, observed=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | Not merged yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
+| Study / experiment ledger | Acquirium PR #78 (`experiment-interface`, `9a70a1f`; was `a74b3bc`): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .table() .timeseries(unit=, observed=, keys=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | Not merged yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
 | Variable declarations | `ExperimentStore.declare` (`Experiments.py:204`) | Within a study, a label's role, kind and metadata (**including unit**) are fixed. Re-declaring it with a different shape raises an error. |
 | Study creation | `ExperimentStore.define` (`Experiments.py:193`) | **Silently idempotent by name**: it returns the existing study instead of failing. The orchestrator has to guard against duplicates itself. |
 | Deletion | — | **There is no way to delete a study, run or observation.** `Manager.delete_timeseries` (`manager.py:809`) deliberately raises an error. The only reset is `recreate=True`, which wipes the whole database. |
@@ -237,17 +237,20 @@ index, values, unit_pyomo, unit_qudt, component, raw_index)`. It works in four s
    - without a resolver, keys are generated but marked unverified (`ExportedSeries.unit_verified`).
    Results are cached for each session. If a unit can't be resolved, strict mode raises an error. Otherwise the value
    is stored with `unit=None` and the raw Pyomo unit is kept in the variable metadata, with a warning.
-4. **Declare and record in Acquirium.**
-   - timeseries → `study.output(key).timeseries(unit=qudt, pyomo_unit=..., component=..., index=[...])`
-   - scalar → `.scalar(unit=qudt, component=..., index=[...])`, one variable per element of a custom-indexed component
-   - `.json()` is used only for specs and solve outcomes, never for model values.
-   - **Unit consistency:** a label's unit can't change once declared. If a later run produces the same key in a
-     different unit with the same dimensions, the values are converted to the unit already declared. If the
-     dimensions don't match, it raises an error.
+4. **Store in Acquirium** (D5): the whole export as one snapshot per run, and the keys a user asks for also as
+   native variables.
+   - snapshot → `model_values` (`.table()`: a UTC `time` column and one Float64 column per timeseries key) plus
+     `model_manifest` (`.json()`: every key's kind, component, index, Pyomo and QUDT units, the scalars' values, and
+     the rows a subset-of-time series covers);
+   - native (`streams=`) → `study.output(key).timeseries(unit=qudt_uri, pyomo_unit=..., component=..., index=...)`
+     or `.scalar(...)`;
+   - **unit consistency (native only):** a label's unit can't change once declared. If a later run produces the
+     same key in a different unit with the same dimensions, the values are converted to the unit already declared.
+     If the dimensions don't match, it raises an error. Snapshots are self-describing and keep the exported unit;
+     reads convert with pint on request.
 
-**Built** (steps 1–3) in `flex_orchestrator.export`, which depends only on pyomo (an import-linter rule). The
-step 4 writer comes with the M1 backend; `conversion_factor(from_unit, to_unit)` is ready for its declared-unit
-check. What the build settled:
+**Built** (steps 1–3) in `flex_orchestrator.export`, which depends only on pyomo (an import-linter rule). Step 4
+is built with D4/D5 in `flex_orchestrator.results`. What the build settled:
 - **Signature:** `export_model_data(model, keys=None, include=None, exclude=None, time_sets=None,
   datetime_index=None, unit_mapper=None, max_scalars_per_component=10_000)`.
 - **Selection:** `keys` alone exports only those keys, and `keys` plus `include` gives the union. A key can name
@@ -280,27 +283,33 @@ The exporter has no Acquirium dependency (it produces `ModelData`). The writer i
 be tested without a database.
 
 **D4 — Explicit results API.**
-- `orch.store_model_results(tag, model, outcome=None, keys=None, include=None, exclude=None)`
+- `orch.store_model_results(tag, model, outcome=None, keys=None, include=None, exclude=None, *, streams=None)`
 - `orch.solve_and_store(tag, model)`
 - The orchestrator never relies on an implied "current model".
+- `keys` / `include` / `exclude` choose what is exported into the snapshot (everything by default); `streams`
+  chooses which of those are also stored natively, for queries and fitting (D5).
 
 **Built** in `flex_orchestrator.orchestrator` (the facade), `flex_orchestrator.results` (the D3 step 4 writer) and
 `flex_orchestrator.backend` (the contract, memory and Acquirium backends), ahead of the rest of M1. What the build
 settled:
 - **Signatures:** `Orchestrator(backend, *, study=None, hooks=None, registry=None, unit_mapper=None,
-  strict_units=False)`; `store_model_results(tag, model, outcome=None, keys=None, include=None, exclude=None, *,
-  time_sets=None, datetime_index=None) -> StoredResult(tag, run_id, status, outcome, keys)`;
-  `solve_and_store(tag, model, keys, include, exclude, *, solve=None, time_sets=None, datetime_index=None,
-  **options)`; `model_results(tag) -> ModelData` (read back; frames come with D7). The D11 connection modes
-  arrive in M1, so for now the backend is passed in.
-- **Order of a store:** check the tag → export → check every value against the study's declarations (kind, unit
-  conversion, datetimes) → declare what's new → start the run → record → finish. Anything that can't be stored
-  fails *before* a run starts. A write that fails part-way marks the run `failed` and re-raises.
+  strict_units=False, frame="polars")`; `store_model_results(tag, model, outcome=None, keys=None, include=None,
+  exclude=None, *, streams=None, time_sets=None, datetime_index=None) -> StoredResult(tag, run_id, status, outcome,
+  keys, streams)`; `store_model_data(tag, data, outcome=None, *, streams=None)` for values exported another way;
+  `solve_and_store(tag, model, keys, include, exclude, *, streams=None, solve=None, time_sets=None,
+  datetime_index=None, **options)`; `model_results(tag, units=None) -> ModelData`, read from the snapshot, with
+  `units={key or component: pyomo unit}` converting through pint (frames come with D7). The D11 connection
+  modes arrive in M1, so for now the backend is passed in.
+- **Order of a store:** check the tag → export → build the snapshot and check the native keys against the study's
+  declarations (kind, unit conversion, datetimes) → declare what's new → start the run → record the manifest, the
+  table, the native values and the outcome → finish. Anything that can't be stored fails *before* a run starts. A
+  write that fails part-way marks the run `failed` and re-raises.
 - **Failed solves:** an outcome that isn't `ok` is stored as a `failed` run holding only `solve_outcome`, so the
   tag can be retried (D9). `solve_and_store` checks the tag before solving and turns a raising solve into an
   `error` outcome (`run_solve`).
 - **Units on Acquirium:** Acquirium rejects a declared unit it can't resolve (`CCY_USD-PER-YR` → 400), so only
-  verified QUDT keys are declared. `pyomo_unit`, `component` and `index` (a JSON string, since Acquirium flattens
+  verified QUDT keys are declared, as QUDT URIs (`http://qudt.org/vocab/unit/KiloW`), which Acquirium passes through
+  without looking the text up for every stream it registers. `pyomo_unit`, `component` and `index` (a JSON string, since Acquirium flattens
   list metadata into dotted keys) are variable metadata. A label keeps its first declaration: Acquirium compares
   re-declarations literally, so the writer never re-declares; later runs are converted to the declared
   `pyomo_unit` with `conversion_factor`, and a mismatch in dimensions raises `UnitError`.
@@ -310,18 +319,59 @@ settled:
   stored and read back as UTC.
 - **Acquirium specifics:** one active run per `Study` handle, so each run gets its own handle; run lookup uses
   the SQL `metadata=` filter, not the graph; NaN is rejected by Acquirium's client, which the exporter already
-  turns into `None`.
+  turns into `None`. Since PR #78 `9a70a1f`, a timeseries sample must have a value, so a native stream leaves
+  out points with no value (the snapshot keeps them as nulls).
 - **Not yet:** the D9 post-write duplicate check and `replace=True` need tombstones (M1); run inputs
   (`model_spec_ref`, `overrides`) come with spec storage (M1).
 
-**D5 — No parquet; everything is stored natively in Acquirium.**
-- Every exported value becomes an Acquirium output variable (timeseries or scalar).
-- `store_data` input becomes Acquirium timeseries streams.
-- Specs become `.json()`.
+**D5 — Whole results as an Acquirium table snapshot; chosen keys also native.**
+- A stored result keeps the whole export as one snapshot: `model_values` (`.table()`, Parquet inside Acquirium)
+  and `model_manifest` (`.json()`) (D3 step 4).
+- Keys a user names (`streams=`) are also native Acquirium variables (timeseries or scalar), so they can be queried,
+  compared across runs and used for fitting (D8, D19).
+- Reads come from the snapshot; units are converted with pint (`model_results(tag, units=...)`).
+- `store_data` input becomes Acquirium timeseries streams (D6). Specs become `.json()`.
+- There is no file store of our own: Parquet is used only through Acquirium's `table` kind.
 
-This keeps everything queryable, tied to units, and covered by the Postgres backup. The cost is more streams per run,
-so M2 includes a benchmark of about 1,000 keys × 8,760 steps × 10 runs. If it is too slow, tighten the default key
-selection rather than adding a separate file store.
+**Why.** Storing every key natively costs one stream per key, and the per-stream cost is in Acquirium's graph, not
+in the data (benchmark below). A snapshot is one table write whatever the number of keys, reads back exactly, and is
+what a D17 result file needs anyway.
+
+**Backups.** On both backends Acquirium keeps a `table` (or `file`) artifact's bytes in
+`<data_dir>/experiment_artifacts/<sha256>`; the database holds only an index row (digest, name, type, size;
+`Experiments.py:556-562`). So a snapshot is covered by a backup of Postgres **plus** the `data_dir` snapshot D14
+already takes, not by Postgres alone. Upstream item U12 asks Acquirium to store artifact bytes in the database on
+the Timescale backend (a ~30–60 line change in `ExperimentStore` plus a migration); then snapshots are covered by
+the Postgres backup with no change here. The manifest, the solve outcome and native values are in Postgres today.
+
+**Benchmark** (`pytest -m benchmark -s`, `tests/test_benchmark_storage.py`). Sized to the models we run: at most a
+month at 15-minute steps (2,976 points per key), stored once per model, through `store_model_data` into a local
+DuckDB Acquirium (PR #78 `9a70a1f`). Measured 2026-10-21 on a Windows dev machine:
+
+| Keys (× 2,976 points + 10 scalars) | Save (snapshot) | Read back |
+|---|---|---|
+| 10 | 0.1 s | 0.1 s |
+| 100 | 0.1 s | 0.2 s |
+| 1,000 | 0.3 s | 0.5 s |
+| 100, with 10 also native (`streams=`) | 2.0 s | |
+
+How we got here (one save of 100 keys, 2,976 points each):
+
+| Layout | Save |
+|---|---|
+| one variable per key, our old pin `a74b3bc` | 56.9 s |
+| one variable per key, PR #78 head | 24.7 s |
+| one keyed variable (`timeseries(keys=...)`), unit as text | 10.4 s |
+| one keyed variable, unit as a QUDT URI | 3.9 s |
+| whole model as `.json()` value / `.file()` | 0.7 s / 0.09 s |
+| **whole model as `.table()` (chosen)** | **0.03 s** (+ manifest) |
+
+- Per-stream cost is in the graph: `insert_graph` once per variable (and growing with the number of streams already
+  registered), plus `resolve_record` once per stream when a unit is given as text. Data inserts run at about
+  90,000+ points/s.
+- A keyed timeseries records all its streams in one snapshot (one registration, one batch insert, one batch of
+  observations); separate variables can't be batched through a public API yet (U11). Native streams therefore stay
+  one variable per key for now, for the few keys users ask for.
 
 **D6 — Data API.**
 - `store_data(name, df, units={col: unit})` accepts a polars or pandas DataFrame. The index (pandas) or a
@@ -342,7 +392,7 @@ the build settled:
   units)`; `get_data(name=None, columns=None, start=None, end=None, *, column=None, frame=None)`. `start` and `end`
   are both inclusive. A dataset name is stored once (`TagExistsError`); datasets and results are separate kinds.
 - **Input tables:** pandas uses its `DatetimeIndex` unless `time_column=` is given; polars uses its only datetime
-  column unless one is named. Columns must be numeric. NaN and pandas' `NA` become missing values. Infinite values,
+  column unless one is named. Columns must be numeric. NaN and pandas' `NA` become missing values, which are no sample (Acquirium needs a value in every timeseries row), so reading one column back skips the rows it has no value for. Infinite values,
   repeated timestamps, empty tables, and `units=` naming a column the table doesn't have are refused before a run
   starts. Timestamps are stored in UTC (naive means UTC).
 - **Units:** as written by the user (`"m3/day"`, `"gal/min"`) or as QUDT keys. They go through the exporter's
@@ -405,7 +455,7 @@ the build settled:
 | `<s>` | — (the study itself; created by `create_study`) | none yet |
 | `<s>::data` | one `store_data` call | `manifest` (`.json`) plus one `.timeseries(unit=)` per column |
 | `<s>::specs` | one `store_model_spec` / `store_surrogate_spec` call | `spec` (`.json`); metadata `{flexorch_kind, flexorch_tag, spec_hash, parent_tag, spec_format}` |
-| `<s>::runs` | one model solve | inputs `model_spec_ref` (`.json`), `overrides` (`.json`); outputs = exported model keys (D3), `solve_outcome` (`.json`); log `solver events` |
+| `<s>::runs` | one model solve | inputs `model_spec_ref` (`.json`), `overrides` (`.json`); outputs `model_values` (`.table`), `model_manifest` (`.json`), the `streams=` keys as native variables (D3, D5), `solve_outcome` (`.json`); log `solver events` |
 | `<s>::fits` | one `fit_surrogate` variant (D19) | inputs `selectors`, `resolved_refs`, `prep`, `regressor`, `params` (`.json`); outputs `fit_result`, `diagnostics` (`.json`), optional `fitted`/`actual`/`residual` (`.timeseries`); metadata `{flexorch_tag, data_hash, spec_tag}` |
 | `<s>::tombstones` | one deletion / duplicate marker | `target` (`.json`), `reason` |
 
@@ -1104,7 +1154,7 @@ under `examples/` runs from start to finish.
 - The writer (D3 step 4), `store_model_results` and `solve_and_store`: **built** (D4). Still to do:
   `stored_model_results` and `ResultHandle.to_frame/to_pandas/to_polars` (on `model_results`).
 - Default flex-pse hooks and `SolveOutcome`.
-- The D5 benchmark.
+- The D5 benchmark: **built** and measured (D5); 1,000 keys waits on U11.
 - **Exit:** scripts 1 and 2 run with the flex-pse hooks and with a user-written build/solve pair. Units round-trip.
 
 #### M3 — Query surface and study export/import (≈ 2 wks)
@@ -1249,11 +1299,23 @@ under `examples/` runs from start to finish.
   (`CCY_USD-PER-KiloW-HR`, `KiloW-HR-PER-M3`), so the ask is that Acquirium's converter recognise composed keys:
   parse them by the same rule, and derive their multiplier from the parts. Then these values get queryable,
   convertible units. Until then they're stored with the Pyomo unit only (D3).
+- **U11 (Acquirium):** a public way to record several variables' histories in one snapshot (the internal
+  `_record_snapshot` already takes a list of variables; today only one keyed variable or an adapter `sample()` at a
+  single time point uses it), and stream registration (`insert_graph`) whose cost doesn't grow with the number of
+  streams already registered. Needed before native streams scale past a few keys per run (D5); snapshots don't
+  depend on it.
+- **U12 (Acquirium):** keep `file` / `table` artifact bytes in the database on the Timescale backend (a `BYTEA`
+  column on `experiment_artifacts`, a schema migration, reads falling back to legacy files), so a Postgres backup
+  covers result snapshots (D5). About 30–60 lines in `ExperimentStore` plus tests on both backends.
+- **U13 (Acquirium, bugs found on `9a70a1f`):** `declare_from` with 100 adapter variables made
+  `/experiments/metadata/sync` fail with "maximum recursion depth exceeded" on a fresh server (50 worked). Report
+  on PR #78.
 - **U10 (flex-pse):** declare the partial-horizon Sets that logic uses (e.g. `time_block.time_index_after_first`
   for `startup` / `shutdown`) as named Sets on the TimeBlock, built from `time_index`. Then the identity check finds
   them directly, and the `time_sets` hook no longer needs to know which Vars use them.
 - **U3 (Acquirium):** hard delete of studies and runs, cascading to observations, artifacts and streams; a
   `superseded` status for runs; optionally a unique-name flag on `define`. When this lands, `purge` gets implemented.
+  **Partly in PR #78 `9a70a1f`:** `delete_runs`, `delete_study` and `clear` exist; review them for M1 tombstones.
 - **U4 (Acquirium):** an optional auth hook / API-key middleware, as defence in depth inside the tenant network.
 - **U5 (Acquirium):** support `PG_DSN_FILE`; make sure the DSN is never logged; remove hard-coded credentials from
   the example configs.

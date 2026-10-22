@@ -117,7 +117,8 @@ def test_an_ambiguous_column_names_its_datasets(memory_orch):
     memory_orch.store_data("b", biogas())
     with pytest.raises(AmbiguousColumnError, match=r"\['a', 'b'\]"):
         memory_orch.get_data(column="biogas_volume")
-    assert memory_orch.get_data("b", columns=["biogas_volume"]).height == 4
+    # A missing value is no sample, so that row isn't in this column.
+    assert memory_orch.get_data("b", columns=["biogas_volume"]).height == 3
 
 
 def test_name_or_column(memory_orch):

@@ -88,9 +88,7 @@ def test_a_run_records_and_reads_back(backend, study):
     backend.declare(study, "x[1]", role="output", kind="scalar")
     backend.declare(study, "outcome", role="output", kind="json")
     run_id = backend.start_run(study, {"flexorch_tag": "a"})
-    backend.record(
-        run_id, "p.power", list(zip(hours(3), [1.0, None, 3.0], strict=True))
-    )
+    backend.record(run_id, "p.power", list(zip(hours(3), [1.0, 2.0, 3.0], strict=True)))
     backend.record(run_id, "x[1]", 2.5)
     backend.record(run_id, "outcome", {"status": "ok", "wall_time": None})
     backend.finish_run(run_id)
@@ -99,7 +97,7 @@ def test_a_run_records_and_reads_back(backend, study):
     assert list(records) == ["p.power", "x[1]", "outcome"]
     assert records["p.power"].rows == [
         (T0.replace(tzinfo=UTC) + timedelta(hours=i), v)
-        for i, v in enumerate([1.0, None, 3.0])
+        for i, v in enumerate([1.0, 2.0, 3.0])
     ]
     assert records["x[1]"].value == 2.5
     assert records["outcome"].value == {"status": "ok", "wall_time": None}
@@ -201,3 +199,40 @@ def test_records_can_read_only_some_labels(backend, study):
         "a",
         "c",
     ]
+
+
+def test_a_timeseries_row_needs_a_value(backend, study):
+    backend.declare(study, "v", role="output", kind="timeseries")
+    run_id = backend.start_run(study, {})
+    with pytest.raises(StorageError):
+        backend.record(run_id, "v", list(zip(hours(2), [None, 1.0], strict=True)))
+    backend.finish_run(run_id)
+
+
+def test_a_table_round_trips(backend, study):
+    import polars as pl
+
+    frame = pl.DataFrame(
+        {
+            "time": pl.Series([T0.replace(tzinfo=UTC)], dtype=pl.Datetime("us", "UTC")),
+            "a.b[c]": pl.Series([None], dtype=pl.Float64),
+            "x": [1.5],
+        }
+    )
+    backend.declare(study, "values", role="output", kind="table")
+    run_id = backend.start_run(study, {})
+    backend.record(run_id, "values", frame)
+    backend.finish_run(run_id)
+    [record] = backend.records(study, run_id)
+    assert record.kind == "table"
+    assert record.value.equals(frame)
+    with pytest.raises(StorageError, match="can't have a unit"):
+        backend.declare(study, "other", role="output", kind="table", unit="KiloW")
+
+
+def test_a_table_must_be_a_polars_frame(backend, study):
+    backend.declare(study, "values", role="output", kind="table")
+    run_id = backend.start_run(study, {})
+    with pytest.raises(StorageError):
+        backend.record(run_id, "values", {"x": [1.0]})
+    backend.finish_run(run_id)

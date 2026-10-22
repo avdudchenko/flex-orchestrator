@@ -6,12 +6,14 @@ one, or a remote tenant stack: PLAN.md D11) doesn't matter here.
 
 Acquirium allows one active run per ``Study`` object, so each run gets its own
 ``Study`` handle, kept until the run ends. Declarations and reads go through
-one cached handle per study.
+one cached handle per study. Units are declared as QUDT URIs, so Acquirium
+doesn't look the unit text up again for every stream it registers.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+import polars as pl
 import requests
 
 from flex_orchestrator.backend.base import (
@@ -24,6 +26,8 @@ from flex_orchestrator.backend.base import (
     to_utc,
 )
 from flex_orchestrator.errors import StorageError
+
+QUDT_UNIT = "http://qudt.org/vocab/unit/"
 
 
 class AcquiriumBackend:
@@ -91,12 +95,12 @@ class AcquiriumBackend:
         """
         builder = getattr(self._study(study), role)(label)
         metadata = dict(metadata or {})
-        if kind == "json":
+        if kind in ("json", "table"):
             if unit is not None:
-                raise StorageError(f"JSON variable {label!r} can't have a unit.")
-            declared = _call(builder.json, **metadata)
+                raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
+            declared = _call(getattr(builder, kind), **metadata)
         else:
-            declared = _call(getattr(builder, kind), unit=unit, **metadata)
+            declared = _call(getattr(builder, kind), unit=_unit_uri(unit), **metadata)
         return _variable(declared)
 
     def start_run(self, study: str, metadata: Mapping[str, Any]) -> str:
@@ -117,6 +121,8 @@ class AcquiriumBackend:
         variable = run.study.variables.get(label)
         if variable is None:
             raise StorageError(f"Variable {label!r} isn't declared.")
+        if variable.kind == "table" and not isinstance(value, pl.DataFrame):
+            raise StorageError(f"Table {label!r} records a polars DataFrame.")
         _call(variable.record, value)
 
     def finish_run(self, run_id: str) -> None:
@@ -177,6 +183,9 @@ class AcquiriumBackend:
                     )
                 ]
                 found.append(Record(variable.label, "timeseries", rows=rows))
+            elif variable.kind == "table":
+                frame = _call(observation.dataframe)
+                found.append(Record(variable.label, "table", frame))
             else:
                 found.append(Record(variable.label, variable.kind, observation.value))
         return found
@@ -195,9 +204,19 @@ class AcquiriumBackend:
             ) from None
 
 
+def _unit_uri(unit: str | None) -> str | None:
+    # A QUDT URI passes through Acquirium's unit resolution; a bare key would be
+    # looked up again for every stream it registers (PLAN.md D5).
+    if unit is None or "://" in unit:
+        return unit
+    return f"{QUDT_UNIT}{unit}"
+
+
 def _variable(declared: Any) -> Variable:
     metadata = dict(declared.metadata)
     unit = metadata.pop("unit", None)
+    if unit is not None and unit.startswith(QUDT_UNIT):
+        unit = unit[len(QUDT_UNIT) :]
     metadata.pop("observed", None)
     return Variable(declared.label, declared.role, declared.kind, unit, metadata)
 

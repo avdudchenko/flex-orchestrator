@@ -8,6 +8,7 @@ import pytest
 from pyomo.environ import units as pu
 
 from flex_orchestrator.errors import (
+    ExportError,
     HookError,
     StorageError,
     StudyExistsError,
@@ -19,6 +20,7 @@ from flex_orchestrator.errors import (
 from flex_orchestrator.export import export_model_data
 from flex_orchestrator.hooks import DEFAULT_HOOKS, HookSet, SolveOutcome
 from flex_orchestrator.orchestrator import SOLVE_OUTCOME, Orchestrator
+from flex_orchestrator.results import MODEL_MANIFEST, MODEL_VALUES
 from flex_orchestrator.testing import fake_solve
 
 pytestmark = pytest.mark.unit
@@ -81,8 +83,15 @@ def test_store_and_read_back(memory_orch, demo_model):
     assert power.values == exported[POWER].values
     assert power.timestamps == utc(exported[POWER].timestamps)
     assert (power.unit_pyomo, power.component, power.index) == ("kW", POWER, [])
-    # No resolver on the memory backend: generated keys aren't declared.
-    assert power.unit_qudt is None
+    # The snapshot keeps the exporter's key; without a resolver it is unverified.
+    assert (power.unit_qudt, power.unit_verified) == ("KiloW", False)
+    for before in exported:
+        after = back[before.key]
+        assert (after.kind, after.values, after.unit_pyomo) == (
+            before.kind,
+            before.values,
+            before.unit_pyomo,
+        )
     element = back["costing.aggregate_power[electrical]"]
     assert (element.component, element.index) == (
         "costing.aggregate_power",
@@ -106,12 +115,87 @@ def test_run_metadata_and_solve_outcome(memory_orch, demo_model):
     assert SOLVE_OUTCOME not in memory_orch.model_results("base").keys()
 
 
-def test_without_outcome_only_values_are_stored(memory_orch, demo_model):
+def test_a_result_is_a_snapshot(memory_orch, demo_model):
     stored = memory_orch.store_model_results("base", demo_model, keys=[POWER])
+    records = memory_orch.backend.records(memory_orch._runs, stored.run_id)
+    assert [r.label for r in records] == [MODEL_MANIFEST, MODEL_VALUES]
+    manifest, table = (r.value for r in records)
+    assert manifest["schema"] == "flexorch-model/1"
+    assert [e["key"] for e in manifest["series"]] == [POWER]
+    assert table.columns == ["time", POWER]
+    assert stored.streams == []
+
+
+def test_streams_are_also_stored_natively(memory_orch, demo_model):
+    stored = memory_orch.store_model_results(
+        "base",
+        demo_model,
+        include=["costing.aggregate*", "demo.pump.energy_intensity"],
+        streams=[POWER, "costing.aggregate_power", "demo.pump.*"],
+    )
+    assert sorted(stored.streams) == sorted(
+        [POWER, "costing.aggregate_power[electrical]", "demo.pump.energy_intensity"]
+    )
+    by_label = {
+        r.label: r
+        for r in memory_orch.backend.records(memory_orch._runs, stored.run_id)
+    }
+    exported = export_model_data(demo_model, keys=[POWER])[POWER]
+    assert [v for _, v in by_label[POWER].rows] == exported.values
+    assert by_label["demo.pump.energy_intensity"].value == 0.5
+    native = memory_orch.backend.variable(memory_orch._runs, POWER)
+    assert native.metadata == {"pyomo_unit": "kW", "component": POWER, "index": "[]"}
+
+
+def test_streams_must_match_something(memory_orch, demo_model):
+    with pytest.raises(ExportError, match="match no exported key"):
+        memory_orch.store_model_results(
+            "base", demo_model, keys=[POWER], streams=["nope.*"]
+        )
+    assert runs(memory_orch) == []
+
+
+def test_stale_values_stay_in_the_snapshot_but_have_no_samples(memory_orch, demo_model):
+    stored = memory_orch.store_model_results(
+        "base", demo_model, keys=["demo.battery.soc"], streams=["demo.battery.soc"]
+    )
+    soc = memory_orch.model_results("base")["demo.battery.soc"]
+    assert soc.values == [None] * len(soc.values) and soc.stale
+    [native] = [
+        r
+        for r in memory_orch.backend.records(memory_orch._runs, stored.run_id)
+        if r.label == "demo.battery.soc"
+    ]
+    assert native.rows == []
+
+
+def test_scalars_only_store_no_table(memory_orch, demo_model):
+    stored = memory_orch.store_model_results(
+        "base", demo_model, keys=["demo.pump.energy_intensity"]
+    )
     labels = [
         r.label for r in memory_orch.backend.records(memory_orch._runs, stored.run_id)
     ]
-    assert labels == [POWER]
+    assert labels == [MODEL_MANIFEST]
+    assert memory_orch.model_results("base")["demo.pump.energy_intensity"].value == 0.5
+
+
+def test_read_converts_units_with_pint(memory_orch, demo_model):
+    memory_orch.store_model_results(
+        "base", demo_model, keys=[POWER, "costing.aggregate_power"]
+    )
+    exported = export_model_data(demo_model, keys=[POWER])[POWER]
+    back = memory_orch.model_results(
+        "base", units={POWER: "W", "costing.aggregate_power": "MW"}
+    )
+    assert back[POWER].unit_pyomo == "W"
+    assert back[POWER].values == pytest.approx([v * 1000 for v in exported.values])
+    assert (back[POWER].unit_qudt, back[POWER].unit_verified) == (None, False)
+    assert back["costing.aggregate_power[electrical]"].unit_pyomo == "MW"
+    with pytest.raises(ExportError, match="weren't stored"):
+        memory_orch.model_results("base", units={"nope": "W"})
+    with pytest.raises(UnitError, match="dimensions"):
+        memory_orch.model_results("base", units={POWER: "m"})
 
 
 def test_a_tag_is_stored_once(memory_orch, demo_model):
@@ -155,10 +239,10 @@ def test_bad_tag(memory_orch, demo_model):
         memory_orch.store_model_results("no spaces", demo_model)
 
 
-# Units keep their first declaration
+# Native streams keep their first declaration
 
 
-def test_values_convert_to_the_declared_unit(memory_orch, demo_model):
+def test_streams_convert_to_the_declared_unit(memory_orch, demo_model):
     memory_orch.backend.declare(
         memory_orch._runs,
         POWER,
@@ -166,11 +250,20 @@ def test_values_convert_to_the_declared_unit(memory_orch, demo_model):
         kind="timeseries",
         metadata={"pyomo_unit": "W", "component": POWER, "index": "[]"},
     )
-    memory_orch.store_model_results("base", demo_model, keys=[POWER])
+    stored = memory_orch.store_model_results(
+        "base", demo_model, keys=[POWER], streams=[POWER]
+    )
     exported = export_model_data(demo_model, keys=[POWER])[POWER]
-    back = memory_orch.model_results("base")[POWER]
-    assert back.unit_pyomo == "W"
-    assert back.values == pytest.approx([v * 1000 for v in exported.values])
+    [native] = [
+        r
+        for r in memory_orch.backend.records(memory_orch._runs, stored.run_id)
+        if r.label == POWER
+    ]
+    assert [v for _, v in native.rows] == pytest.approx(
+        [v * 1000 for v in exported.values]
+    )
+    # The snapshot keeps the exported unit.
+    assert memory_orch.model_results("base")[POWER].unit_pyomo == "kW"
 
 
 @pytest.mark.parametrize(
@@ -194,7 +287,9 @@ def test_values_that_cant_be_stored_leave_no_run(
 ):
     memory_orch.backend.declare(memory_orch._runs, POWER, role="output", **declared)
     with pytest.raises(error, match=match):
-        memory_orch.store_model_results("base", demo_model, keys=[POWER])
+        memory_orch.store_model_results(
+            "base", demo_model, keys=[POWER], streams=[POWER]
+        )
     assert runs(memory_orch) == []
 
 

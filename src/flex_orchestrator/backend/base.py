@@ -9,7 +9,10 @@ Acquirium and the same contract tests run against both:
   metadata, and keeps them: a later declaration of the same label with another
   shape is an error;
 - a **run** starts with its metadata (which can't change afterwards), records
-  values for declared variables, and ends ``succeeded`` or ``failed``.
+  values for declared variables, and ends ``succeeded`` or ``failed``;
+- a **table** variable records a whole polars DataFrame (Acquirium stores it
+  as Parquet), and a timeseries sample always has a value: a missing value is
+  no sample.
 
 Timestamps are timezone-aware UTC datetimes on the way out; naive datetimes
 going in are taken as UTC.
@@ -23,9 +26,9 @@ from typing import Any, Literal, Protocol
 from flex_orchestrator.errors import StorageError
 
 Role = Literal["input", "output"]
-VariableKind = Literal["timeseries", "scalar", "json"]
+VariableKind = Literal["timeseries", "scalar", "json", "table"]
 RunStatus = Literal["running", "succeeded", "failed"]
-Row = tuple[datetime, float | None]
+Row = tuple[datetime, float]
 """One timeseries sample: ``(timestamp, value)``."""
 
 
@@ -74,7 +77,8 @@ class Record:
     Attributes:
         label: The variable's label.
         kind: The variable's kind.
-        value: The value of a scalar or JSON variable.
+        value: The value of a scalar or JSON variable, or the polars DataFrame
+            of a table.
         rows: The samples of a timeseries, in time order.
     """
 
@@ -127,11 +131,13 @@ class StorageBackend(Protocol):
     def record(self, run_id: str, label: str, value: Any) -> None:
         """Record a value in a running run.
 
-        ``value`` is a list of :data:`Row` for a timeseries, a number or
-        ``None`` for a scalar, and any JSON value for a JSON variable.
+        ``value`` is a list of :data:`Row` for a timeseries (every row with a
+        number), a number or ``None`` for a scalar, any JSON value for a JSON
+        variable, and a polars DataFrame for a table.
 
         Raises:
-            StorageError: If the run isn't running or ``label`` isn't declared.
+            StorageError: If the run isn't running, ``label`` isn't declared, or
+                the value doesn't fit the variable's kind.
         """
 
     def finish_run(self, run_id: str) -> None:
@@ -201,9 +207,13 @@ def to_utc(when: Any) -> datetime:
 def to_rows(timestamps: Sequence[Any], values: Sequence[float | None]) -> list[Row]:
     """Pair timestamps with values as UTC :data:`Row` samples.
 
+    A missing value (``None``) is left out: a timeseries has no sample there.
+
     Raises:
         StorageError: If a timestamp isn't a datetime.
     """
     return [
-        (to_utc(when), value) for when, value in zip(timestamps, values, strict=True)
+        (to_utc(when), value)
+        for when, value in zip(timestamps, values, strict=True)
+        if value is not None
     ]

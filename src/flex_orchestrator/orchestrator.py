@@ -3,12 +3,13 @@
 Model results are stored **explicitly**: every call names the model and the
 tag, and there is no "current model" (PLAN.md D4). A study ``s`` is laid out as
 backend studies (D10): ``s`` itself; ``s::runs``, where each stored result is
-one run carrying ``{flexorch_kind: "result", flexorch_tag: tag}``, the exported
-model values as outputs, and the ``solve_outcome`` JSON; and ``s::data``, where
-each dataset is one run (D6, :mod:`flex_orchestrator.data`).
+one run carrying ``{flexorch_kind: "result", flexorch_tag: tag}``, the model
+snapshot (:mod:`flex_orchestrator.results`), any values stored natively, and
+the ``solve_outcome`` JSON; and ``s::data``, where each dataset is one run (D6,
+:mod:`flex_orchestrator.data`).
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal
@@ -33,6 +34,7 @@ from flex_orchestrator.hooks import (
     SolveOutcome,
     run_solve,
 )
+from flex_orchestrator.results import MODEL_MANIFEST, MODEL_VALUES
 from flex_orchestrator.specs import check_tag
 
 RESULT_KIND = "result"
@@ -56,7 +58,8 @@ class StoredResult:
         status: ``"succeeded"``, or ``"failed"`` when the solve wasn't ``ok``
             (then only the solve outcome is stored, and the tag can be reused).
         outcome: The solve outcome, if one was given.
-        keys: The exported keys that were stored.
+        keys: The exported keys stored in the snapshot.
+        streams: The keys also stored as native variables.
     """
 
     tag: str
@@ -64,6 +67,7 @@ class StoredResult:
     status: Literal["succeeded", "failed"]
     outcome: SolveOutcome | None = None
     keys: list[str] = field(default_factory=list)
+    streams: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -285,16 +289,20 @@ class Orchestrator:
         include: Iterable[str] | None = None,
         exclude: Iterable[str] | None = None,
         *,
+        streams: Iterable[str] | None = None,
         time_sets: Sequence[Any] | None = None,
         datetime_index: Sequence[Any] | None = None,
     ) -> StoredResult:
         """Export a model's values and store them under ``tag``.
 
         Values are exported with
-        :func:`~flex_orchestrator.export.export_model_data` and checked against
-        the study's declarations before the run starts, so a value that can't be
-        stored leaves no run behind. If ``outcome`` isn't ``ok``, only the
-        outcome is stored, in a ``failed`` run, so the tag can be used again.
+        :func:`~flex_orchestrator.export.export_model_data` and stored as one
+        snapshot (a ``table`` of timeseries plus a JSON manifest: PLAN.md D5).
+        Keys named in ``streams`` are also stored as native Acquirium variables,
+        for queries and fitting. Everything is checked before the run starts,
+        so a value that can't be stored leaves no run behind. If ``outcome``
+        isn't ``ok``, only the outcome is stored, in a ``failed`` run, so the
+        tag can be used again.
 
         Args:
             tag: The result's tag, unique among the study's results.
@@ -303,6 +311,8 @@ class Orchestrator:
             keys: Exact paths to export (see ``export_model_data``).
             include: Glob patterns to export.
             exclude: Glob patterns to leave out.
+            streams: Keys, component paths or globs of exported values to also
+                store natively (``["costing.aggregate_electrical_power"]``).
             time_sets: The model's time Sets. By default the ``time_sets`` hook
                 gives them (for flex-pse models, including the partial-horizon
                 Sets of startup/shutdown).
@@ -332,10 +342,15 @@ class Orchestrator:
                 datetime_index=datetime_index,
                 unit_mapper=self.unit_mapper,
             )
-        return self._store(tag, data, outcome)
+        return self._store(tag, data, outcome, streams)
 
     def store_model_data(
-        self, tag: str, data: ModelData, outcome: SolveOutcome | None = None
+        self,
+        tag: str,
+        data: ModelData,
+        outcome: SolveOutcome | None = None,
+        *,
+        streams: Iterable[str] | None = None,
     ) -> StoredResult:
         """Store values that are already exported under ``tag``.
 
@@ -348,17 +363,20 @@ class Orchestrator:
             data: The values.
             outcome: How the solve ended. If it isn't ``ok``, ``data`` is
                 ignored and only the outcome is stored, in a ``failed`` run.
+            streams: Values to also store natively; see
+                :meth:`store_model_results`.
 
         Returns:
             What was stored.
 
         Raises:
             TagExistsError: If a result with this tag is running or succeeded.
-            StorageError, UnitError: If the values can't be stored.
+            ExportError, StorageError, UnitError: If the values can't be
+                stored.
         """
         self._check_new(tag)
         _check_outcome(outcome)
-        return self._store(tag, data, outcome)
+        return self._store(tag, data, outcome, streams)
 
     def solve_and_store(
         self,
@@ -368,6 +386,7 @@ class Orchestrator:
         include: Iterable[str] | None = None,
         exclude: Iterable[str] | None = None,
         *,
+        streams: Iterable[str] | None = None,
         solve: Any = None,
         time_sets: Sequence[Any] | None = None,
         datetime_index: Sequence[Any] | None = None,
@@ -385,6 +404,8 @@ class Orchestrator:
             keys: Exact paths to export.
             include: Glob patterns to export.
             exclude: Glob patterns to leave out.
+            streams: Values to also store natively; see
+                :meth:`store_model_results`.
             solve: The solve hook (a callable, import string or registered
                 name); the orchestrator's ``solve`` hook by default.
             time_sets: See :meth:`store_model_results`.
@@ -407,35 +428,68 @@ class Orchestrator:
             keys,
             include,
             exclude,
+            streams=streams,
             time_sets=time_sets,
             datetime_index=datetime_index,
         )
 
-    def model_results(self, tag: str) -> ModelData:
-        """Read a stored result's model values back.
+    def model_results(
+        self, tag: str, units: Mapping[str, str] | None = None
+    ) -> ModelData:
+        """Read a stored result's model values back from its snapshot.
 
-        Values come back in the units their labels were first declared with,
-        with UTC timestamps.
+        Values come back as they were exported, with UTC timestamps, unless
+        ``units`` asks for others.
+
+        Args:
+            tag: The result's tag.
+            units: ``{key or component path: Pyomo unit}`` to convert to, with
+                pint (``{"costing.aggregate_electrical_power": "W"}``).
 
         Raises:
             TagNotFoundError: If no succeeded result has this tag.
+            ExportError, UnitError: If ``units`` names a key that wasn't stored,
+                or a unit that doesn't convert.
         """
         run = self._latest(tag, RESULT_KIND)
-        return results.read_model_data(self.backend, self._runs, run.run_id)
+        found = {
+            r.label: r.value
+            for r in self.backend.records(
+                self._runs, run.run_id, labels=[MODEL_MANIFEST, MODEL_VALUES]
+            )
+        }
+        data = results.read_snapshot(found.get(MODEL_VALUES), found[MODEL_MANIFEST])
+        return results.convert(data, units) if units else data
 
     # Internals
 
     def _store(
-        self, tag: str, data: ModelData | None, outcome: SolveOutcome | None
+        self,
+        tag: str,
+        data: ModelData | None,
+        outcome: SolveOutcome | None,
+        streams: Iterable[str] | None,
     ) -> StoredResult:
-        writes = []
+        table, manifest, writes = None, None, []
         if data is not None and (outcome is None or outcome.ok):
-            writes = results.plan_writes(self.backend, self._runs, data)
+            table, manifest = results.snapshot(data)
+            if streams:
+                native = results.select(data, streams)
+                writes = results.plan_writes(self.backend, self._runs, native)
             results.declare(self.backend, self._runs, writes)
+            self.backend.declare(self._runs, MODEL_MANIFEST, role="output", kind="json")
+            if table is not None:
+                self.backend.declare(
+                    self._runs, MODEL_VALUES, role="output", kind="table"
+                )
         if outcome is not None:
             self.backend.declare(self._runs, SOLVE_OUTCOME, role="output", kind="json")
         run_id = self.backend.start_run(self._runs, self._metadata(tag))
         try:
+            if manifest is not None:
+                self.backend.record(run_id, MODEL_MANIFEST, manifest)
+            if table is not None:
+                self.backend.record(run_id, MODEL_VALUES, table)
             results.record(self.backend, run_id, writes)
             if outcome is not None:
                 self.backend.record(
@@ -454,7 +508,12 @@ class Orchestrator:
             return StoredResult(tag, run_id, "failed", outcome)
         self.backend.finish_run(run_id)
         return StoredResult(
-            tag, run_id, "succeeded", outcome, [w.series.key for w in writes]
+            tag,
+            run_id,
+            "succeeded",
+            outcome,
+            data.keys() if data is not None else [],
+            [w.series.key for w in writes],
         )
 
     @property
