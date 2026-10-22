@@ -236,3 +236,32 @@ def test_a_table_must_be_a_polars_frame(backend, study):
     with pytest.raises(StorageError):
         backend.record(run_id, "values", {"x": [1.0]})
     backend.finish_run(run_id)
+
+
+def test_delete_runs(backend, study):
+    backend.declare(study, "x", role="output", kind="scalar")
+    kept, gone, running = (backend.start_run(study, {"n": n}) for n in "abc")
+    for run_id in (kept, gone):
+        backend.record(run_id, "x", 1.0)
+        backend.finish_run(run_id)
+    with pytest.raises(StorageError):
+        backend.delete_runs(study, [gone, running])  # one is still running
+    assert len(backend.runs(study)) == 3
+    with pytest.raises(StorageError):
+        backend.delete_runs(study, ["00000000-0000-0000-0000-000000000000"])
+    backend.delete_runs(study, [gone])
+    assert [r.run_id for r in backend.runs(study)] == [kept, running]
+    backend.delete_runs(study, [])
+    backend.finish_run(running)
+
+
+def test_delete_study(backend, study):
+    backend.declare(study, "x", role="output", kind="scalar")
+    run_id = backend.start_run(study, {})
+    with pytest.raises(StorageError):
+        backend.delete_study(study)  # a run is still running
+    backend.finish_run(run_id)
+    backend.delete_study(study)
+    assert not backend.has_study(study)
+    backend.define_study(study)
+    assert backend.variable(study, "x") is None

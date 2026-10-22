@@ -160,6 +160,22 @@ class AcquiriumBackend:
         self._studies[study] = handle
         return [_variable(v) for v in handle.variables.all()]
 
+    def delete_runs(self, study: str, run_ids: Sequence[str]) -> None:
+        """Delete finished runs and everything they recorded."""
+        if not run_ids:
+            return
+        handle = self._study(study)
+        found = {r.run_id for r in _call(handle.experiments.all)}
+        missing = [run_id for run_id in run_ids if run_id not in found]
+        if missing:
+            raise StorageError(f"Study {study!r} has no run {missing[0]!r}.")
+        _call(handle.client.delete_experiments, list(run_ids))
+
+    def delete_study(self, name: str) -> None:
+        """Delete a study, its declarations and every run."""
+        _call(self._study(name).delete)
+        del self._studies[name]
+
     def records(
         self, study: str, run_id: str, labels: Sequence[str] | None = None
     ) -> list[Record]:

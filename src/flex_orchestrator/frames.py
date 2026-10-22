@@ -150,3 +150,30 @@ def _number(column: str, value: Any) -> float | None:
     if math.isinf(value):
         raise StorageError(f"Column {column!r} holds an infinite value.")
     return value
+
+
+def model_frame(data: Any, frame: FrameKind) -> Any:
+    """Return a :class:`~flex_orchestrator.export.ModelData`'s timeseries as one table.
+
+    Every timeseries key is a column, aligned on the union of their timestamps
+    (a subset of time such as ``startup`` is missing at the points it doesn't
+    cover). Scalars aren't included.
+
+    Args:
+        data: The values, with datetime timestamps.
+        frame: ``"polars"`` or ``"pandas"``.
+    """
+    series = data.timeseries()
+    by_key = {
+        s.key: dict(zip([to_utc(t) for t in s.timestamps], s.values, strict=True))
+        for s in series
+    }
+    timestamps = sorted({when for values in by_key.values() for when in values})
+    return from_columns(
+        timestamps,
+        {
+            key: [values.get(when) for when in timestamps]
+            for key, values in by_key.items()
+        },
+        frame,
+    )

@@ -10,6 +10,7 @@ Acquirium and the same contract tests run against both:
   shape is an error;
 - a **run** starts with its metadata (which can't change afterwards), records
   values for declared variables, and ends ``succeeded`` or ``failed``;
+- finished runs, and whole studies, can be **deleted** (never a running one);
 - a **table** variable records a whole polars DataFrame (Acquirium stores it
   as Parquet), and a timeseries sample always has a value: a missing value is
   no sample.
@@ -163,6 +164,21 @@ class StorageBackend(Protocol):
 
     def variables(self, study: str) -> list[Variable]:
         """Return every variable declared in the study."""
+
+    def delete_runs(self, study: str, run_ids: Sequence[str]) -> None:
+        """Delete finished runs and everything they recorded.
+
+        Raises:
+            StorageError: If a run doesn't exist in the study or is still
+                running; then nothing is deleted.
+        """
+
+    def delete_study(self, name: str) -> None:
+        """Delete a study, its declarations and every run.
+
+        Raises:
+            StorageError: If the study doesn't exist or has a running run.
+        """
 
     def records(
         self, study: str, run_id: str, labels: Sequence[str] | None = None

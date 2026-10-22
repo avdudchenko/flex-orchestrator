@@ -212,7 +212,7 @@ index, values, unit_pyomo, unit_qudt, component, raw_index)`. It works in four s
        e.g. `costing.capital_cost[pump1]`, `unit.coeff[1,2]`, `tariff.rate[peak]`.
        - Keys are formatted from Pyomo's own `ComponentData.name`, so they match `model.pprint()`.
        - The parent component and the raw index are stored in the variable metadata
-         (`{component: "costing.capital_cost", index: ["pump1"]}`), so `orch.variables.where(component=...)` finds all
+         (`{component: "costing.capital_cost", index: ["pump1"]}`), so Acquirium's `study.variables.where(component=...)` (through `orch.acquirium`) finds all
          elements of one component.
    - **Limits and edge cases:**
      - Index values that aren't strings or numbers are converted with `str()`. If two of them produce the same key,
@@ -321,14 +321,13 @@ settled:
   the SQL `metadata=` filter, not the graph; NaN is rejected by Acquirium's client, which the exporter already
   turns into `None`. Since PR #78 `9a70a1f`, a timeseries sample must have a value, so a native stream leaves
   out points with no value (the snapshot keeps them as nulls).
-- **Not yet:** the D9 post-write duplicate check and `replace=True` need tombstones (M1); run inputs
-  (`model_spec_ref`, `overrides`) come with spec storage (M1).
+- **Not yet:** run inputs (`model_spec_ref`, `overrides`) come with spec storage (M1).
 
 **D5 — Whole results as an Acquirium table snapshot; chosen keys also native.**
 - A stored result keeps the whole export as one snapshot: `model_values` (`.table()`, Parquet inside Acquirium)
   and `model_manifest` (`.json()`) (D3 step 4).
 - Keys a user names (`streams=`) are also native Acquirium variables (timeseries or scalar), so they can be queried,
-  compared across runs and used for fitting (D8, D19).
+  compared across runs and used for fitting (through `orch.acquirium`, and D19).
 - Reads come from the snapshot; units are converted with pint (`model_results(tag, units=...)`).
 - `store_data` input becomes Acquirium timeseries streams (D6). Specs become `.json()`.
 - There is no file store of our own: Parquet is used only through Acquirium's `table` kind.
@@ -410,17 +409,26 @@ the build settled:
 - Results are built in polars and converted with `polars.DataFrame.to_pandas()`, with a DatetimeIndex restored.
 - Shorthand methods: `.to_pandas()` / `.to_polars()`.
 
-**D8 — Direct query access to Acquirium.**
-- `orch.query()` returns the native Acquirium `Query` builder, **scoped to the current study**.
-- `orch.query(scope="tenant")` searches the tenant's whole Acquirium. Because of D14, that is still only the tenant's
-  own data.
-- `orch.attr`; `orch.runs.where(**metadata)` / `orch.variables.where(...)` with `frame=` output.
-- `orch.timeseries(ref_uris, start=, end=, frame=)`, and `orch.sparql(q)` (read-only).
-- `orch.acquirium`: the raw client, for anything the orchestrator doesn't wrap.
-- Isolation comes from the deployment (D14), not from filtering queries. So raw query access is safe to expose:
-  there is no other tenant's data in the store to leak.
+**Built.** `flex_orchestrator.frames` converts tables in and out (D6), and stored results are read through handles:
+- `orch.result(tag)` and `orch.stored_model_results(tags=None)` return `ResultHandle(tag, run_id, metadata,
+  started_at)`. A handle reads its snapshot on first use and keeps it.
+- `handle.to_frame(frame=None, units=None)` returns the timeseries as one table: a `time` column first (polars) or
+  a UTC `DatetimeIndex` named `time` (pandas), and one column per key. A subset of time (`startup`) is null at the
+  points it doesn't cover. `.to_polars()` / `.to_pandas()` are the shorthands; `frame=None` uses the orchestrator's
+  default.
+- `handle.data(units=)` returns `ModelData`; `handle.scalars()`, `handle.units` (`{key: pyomo unit}`) and
+  `handle.outcome` (the `SolveOutcome`, or `None`) cover the rest. `units=` converts with pint (D5).
+- `orch.model_results(tag, units=)` is `orch.result(tag).data(units)`; `orch.get_data(..., frame=)` (D6).
 
-**D9 — No duplicates, no overwrites.** Acquirium allows duplicates, so the orchestrator enforces its own rules.
+**D8 — Acquirium is used directly; no query wrappers.** `orch.acquirium` returns the backend's Acquirium client, and
+users query it with Acquirium's own API (`ac.study.get("<s>::runs").experiments.where(...)`, `ac.query()`,
+`sparql`, ...). The orchestrator doesn't wrap, scope or re-export queries, so there is no second query API to keep in
+step with Acquirium's. Isolation comes from the deployment (D14): the client only reaches the tenant's own
+Acquirium, so raw access leaks nothing. On a backend with no Acquirium (the memory backend) `orch.acquirium`
+raises `StorageError`.
+
+**D9 — No duplicates, no overwrites; deletion is real.** Acquirium allows duplicates, so the orchestrator enforces its
+own rules.
 - **Studies.**
   - `create_study(name)` checks `ac.study.get(name)` first, and raises `StudyExistsError` if the study exists.
   - `select_study(name)` raises `StudyNotFoundError` if it doesn't exist.
@@ -428,25 +436,32 @@ the build settled:
 - **Tags.**
   - Within a study, every stored item has a unique `(kind, tag)`, saved in run metadata as
     `{flexorch_kind, flexorch_tag}`.
-  - Storing an existing tag (status `succeeded` or `running`, not tombstoned) raises `TagExistsError`.
+  - Storing an existing tag (status `succeeded` or `running`) raises `TagExistsError`.
   - A `failed` run doesn't count as existing, so you can retry it.
 - **Specs.** A content hash (`spec_hash`, sha256 of canonical JSON) is stored with each spec. `execute_study` uses
   the hash plus the overrides to skip runs that already succeeded (resume).
 - **Races.** Check-then-write isn't atomic in Acquirium. Mitigations:
   - one writing process per tenant: the main process in D13, and in Phase 2 the tenant's orchestrator service;
-  - an in-process lock for each study;
-  - **a check after every write**: if two live runs carry the same tag, the later one is tombstoned as `duplicate`
-    and the call fails.
+  - an in-process lock for each study, held from the tag check to the end of the write;
+  - **a check after every write**: if two live runs carry the same tag, the earliest one wins; the later one is
+    deleted and its call fails with `TagExistsError`. With `replace=True` the latest wins instead.
 
-**Deletion (placeholder until Acquirium supports it, upstream item U3):**
-- `orch.delete(kind, tag)` / `orch.delete_study(name)` do a **soft delete**. Each deletion is recorded as a run in a
-  `<study>::tombstones` ledger study (`target`, `reason`, `deleted_at`, `deleted_by`). This ledger lives in the
-  **SQL tables, so it is covered by the Postgres backup**, unlike graph-only `insert_metadata` flags.
-- Every read leaves out tombstoned items by default. `include_deleted=True` shows them.
-- `store_*(tag, ..., replace=True)` tombstones the old item, then writes the new one. `replace` defaults to `False`,
-  so overwriting is never accidental.
-- `orch.purge(...)` is defined now but **raises `NotImplementedError`**, with a pointer to U3.
-- `deletion.mode = "soft" | "disabled"` lets a deployment turn deletion off completely.
+**Deletion** uses Acquirium's own (PR #78 `9a70a1f` added `delete_runs`, `delete_study` and `clear`; upstream item
+U3). Deleting removes the runs' observations, samples and unshared files for good; a running run is never deleted.
+- `orch.delete(kind, tag)` deletes every run with that kind and tag (failed attempts included), so the tag is free
+  again. `kind` is `"result"` or `"data"`; specs (M1) join them.
+- `orch.delete_study(name)` deletes the study's ledger studies (`<s>::runs`, `<s>::data`, ...) and the study itself,
+  and deselects it if selected. A running run anywhere in it stops the delete before anything is removed.
+- `store_*(tag, ..., replace=True)` writes the new item first, then deletes the old one, so a write that fails
+  (or a solve that isn't `ok`) leaves the old item in place. `replace` defaults to `False`, so overwriting is never
+  accidental.
+- `Orchestrator(..., allow_delete=False)` turns off `delete`, `delete_study` and `replace` for a deployment that
+  must never lose a stored item.
+- There is no soft delete, tombstone ledger or `include_deleted`: a deleted item is gone, and backups (D14) are the
+  way back.
+
+**Built** in `Orchestrator` and the storage contract (`delete_runs(study, run_ids)`, `delete_study(name)`, on both
+backends). The race check is tested by letting a rival write land between the tag check and the write.
 
 **D10 — How an orchestrator study is laid out in Acquirium.**
 
@@ -457,7 +472,6 @@ the build settled:
 | `<s>::specs` | one `store_model_spec` / `store_surrogate_spec` call | `spec` (`.json`); metadata `{flexorch_kind, flexorch_tag, spec_hash, parent_tag, spec_format}` |
 | `<s>::runs` | one model solve | inputs `model_spec_ref` (`.json`), `overrides` (`.json`); outputs `model_values` (`.table`), `model_manifest` (`.json`), the `streams=` keys as native variables (D3, D5), `solve_outcome` (`.json`); log `solver events` |
 | `<s>::fits` | one `fit_surrogate` variant (D19) | inputs `selectors`, `resolved_refs`, `prep`, `regressor`, `params` (`.json`); outputs `fit_result`, `diagnostics` (`.json`), optional `fitted`/`actual`/`residual` (`.timeseries`); metadata `{flexorch_tag, data_hash, spec_tag}` |
-| `<s>::tombstones` | one deletion / duplicate marker | `target` (`.json`), `reason` |
 
 Every run's metadata also records the orchestrator, flex-pse and Acquirium versions, the user (from the environment
 in Phase 1, from the token in Phase 2), and the hook names, so a result can be reproduced.
@@ -516,7 +530,6 @@ example_a/                                  # one folder per study
     biogas_h1.json                          # one file per fit run (D19): regressor, params, diagnostics, data provenance
   results/
     model_with_surrogate_biogas_h1.json       # one file per result tag (D3/D4)
-  tombstones.json                           # only with include_deleted=True
   checksums.sha256                          # sha256 of every file, checked on import
 ```
 
@@ -560,7 +573,7 @@ Schemas are published in `docs/schemas/`.
 
 ```python
 report = orch.export_study("exports/example_a", parts=("specs", "data", "results"),
-                           tags=None, include_deleted=False, compress=False)   # compress → *.json.gz
+                           tags=None, compress=False)                          # compress → *.json.gz
 orch.export_result("model_with_surrogate_biogas_h1", "exports/r1.json")          # a single file
 res = flex_orchestrator.archive.load_result("exports/example_a/results/…json")  # no DB needed → ResultHandle
 res.to_frame("pandas"); res.units
@@ -660,7 +673,7 @@ plugin = Plugin(
   `flex-orch serve` and uvicorn use `--factory`.
 - Plugin routers are mounted at **`/ext/<plugin>/…`**, with the auth, tenant and audit dependencies applied **to the
   whole router** (`app.include_router(router, prefix=..., dependencies=[Depends(authenticated_tenant)])`). **A plugin
-  route can't be unauthenticated by accident.** Core prefixes (`/studies`, `/jobs`, `/commands`, `/query`, `/health`,
+  route can't be unauthenticated by accident.** Core prefixes (`/studies`, `/jobs`, `/commands`, `/health`,
   `/ready`, `/ext`) are reserved, and a collision fails at startup.
 - **Request dependencies** in `flex_orchestrator.server.deps`, the same ones the core routes use:
   - `get_orchestrator` (the tenant's orchestrator, or the subclass);
@@ -944,7 +957,7 @@ what they need:
 ```
 src/flex_orchestrator/
   __init__.py            # Orchestrator, StudyConfig, export_model_data
-  orchestrator.py        # facade: studies, store/get, results, query passthrough
+  orchestrator.py        # facade: studies, store/get, results, `acquirium` (the raw client)
   results.py             # D3 step 4 writer: ModelData -> declarations + run records, and read back
   errors.py              # StudyExistsError, StudyNotFoundError, TagExistsError, UnitError, DBAuthError, ...
   connection.py          # D11 modes: local / postgres / remote; DSN building, preflight, server lock
@@ -957,7 +970,7 @@ src/flex_orchestrator/
     units.py             # UnitMapper: pyomo → QUDT table, resolver chain, conversion
     model_data.py        # ModelData / ExportedSeries containers
   backend/
-    base.py              # StorageBackend protocol: studies, runs, variables, observations, streams, query, tombstones
+    base.py              # StorageBackend protocol: studies, variables, runs, records, deletion
     acquirium.py         # D9/D10 mapping onto ac.study / timeseries
     memory.py            # in-memory backend for unit tests (implements the same contract)
   flexpse/               # optional default hooks (import guarded)
@@ -1036,9 +1049,9 @@ orch.store_model_results("model_with_surrogate_biogas_h1", m, outcome, include=[
 for r in orch.stored_model_results():                                  # lazy ResultHandles
     df = r.to_frame("polars"); r.tag; r.metadata; r.units
 
-orch.query().where(orch.attr.unit == "KiloW").dataframe()              # native Acquirium query, study-scoped
-orch.runs.where(flexorch_kind="result", status="succeeded").frame()
-orch.delete("result", "model_with_surrogate_biogas_h2")                  # soft delete (tombstone)
+ac = orch.acquirium                                                    # D8: Acquirium's own API, no wrappers
+ac.study.get("example_a::runs").experiments.where(metadata={"flexorch_kind": "result"}, status="succeeded").frame()
+orch.delete("result", "model_with_surrogate_biogas_h2")                  # deletes it for good (D9)
 orch.export_study("exports/example_a")                                 # D17: folder of JSON specs/data/results
 orch.import_study("exports/example_a", name="example_a_copy")
 orch.execute_study(cfg, build=my_build, solve=my_solve, max_workers=8) # Ray (a built-in command)
@@ -1074,7 +1087,7 @@ sweeps:
     values: [0.1, 0.2, 0.3]
 export: {include: ["costing.*", "plant.digester.*"], strict_units: true}
 output_name: "model_with_surrogate_{surrogate}_price_{costing.electricity_price}"
-on_existing: error                       # error | skip (resume) | replace (tombstone + rewrite)
+on_existing: error                       # error | skip (resume) | replace (write, then delete the old)
 execution: {max_workers: 8, task_timeout_s: 1800, retries: 1, on_error: continue}
 ```
 
@@ -1088,10 +1101,9 @@ Phase 2, the HTTP API (every route needs a valid tenant JWT, D15):
 | GET | `/studies/{s}/results` | viewer | all model results as JSON: `{tag: {metadata, units, index, columns: {key: [...]}}}` (`?tags=`, `?keys=`) |
 | GET/POST | `/studies/{s}/specs/{kind}/{tag}` | viewer / editor | read / store specs (409 on duplicate) |
 | POST | `/studies/{s}/data/{name}` · GET | editor · viewer | upload / read datasets |
-| DELETE | `/studies/{s}/{kind}/{tag}` | owner | soft delete |
+| DELETE | `/studies/{s}/{kind}/{tag}` | owner | delete (D9) |
 | GET | `/studies/{s}/export` · `/studies/{s}/results/{tag}/export` | viewer | the D17 export as a zip download · one result JSON |
 | POST | `/studies/import` | editor | upload a D17 export zip → `202 {job_id}` |
-| POST | `/query` | viewer | read-only Acquirium query (tenant-scoped by deployment) |
 | POST | `/studies/{s}/surrogates/fit` | editor | alias of `POST /commands/fit_surrogate` for that study (D19); the same code path |
 | GET | `/commands` | viewer | list available commands (built-in + enabled plugins) and their parameter schemas |
 | POST | `/commands/{name}` | the command's `role` | run a command (D18): long-running → `202 {job_id}`, otherwise the result |
@@ -1126,9 +1138,9 @@ under `examples/` runs from start to finish.
   `pre-commit run --all-files` is clean, and a deliberately misformatted file fails both the hook and the CI `lint`
   job.
 
-#### M1 — Storage backend, connections, uniqueness, tombstones (≈ 2 wks)
+#### M1 — Storage backend, connections, specs (≈ 1.5 wks)
 - The `StorageBackend` protocol, plus the memory and Acquirium backends (D10). **Built** for runs, variables and
-  results (D4); M1 adds what specs, data and tombstones need.
+  results (D4), datasets (D6) and deletion (D9); M1 adds what specs need.
 - `connection.py` / `settings.py` (D11):
   - the three modes, with credentials from env or secret file and `SecretStr`;
   - checks before starting, and the server lock;
@@ -1138,14 +1150,14 @@ under `examples/` runs from start to finish.
   input).
 - Referenced spec files (D2): the flex-pse `spec_assets` hook, assets stored as `.file()` inputs, `spec_hash`
   covering asset hashes, and `materialize_spec` for replay.
-- The tombstone ledger, deleted items hidden from reads, `replace=True`, and `purge` → `NotImplementedError`.
-- `frames.py`: polars/pandas in and out **built** with D6; D7 adds `.to_pandas()` / `.to_polars()` on results.
+- D9 uniqueness, deletion and `replace=True`: **built** for results and datasets; specs join with spec storage.
+- `frames.py` and result handles (D7): **built**.
 - **Exit:**
   - Script 1 up to `store_model_spec` works in modes 1, 2 and 3.
   - A spec with a tariff file, stored and then rebuilt from another working directory, gives the same model; editing
     the tariff file changes `spec_hash`.
   - A wrong password gives `DBAuthError`, and the password never appears in logs or metadata.
-  - The contract, duplicate and tombstone tests pass.
+  - The contract and duplicate tests pass.
 
 #### M2 — Model data exporter, units, results (≈ 3 wks)
 - `export.walker`: key and pattern selection, identity-based time-set detection, product sets split into time and
@@ -1157,16 +1169,13 @@ under `examples/` runs from start to finish.
 - The D5 benchmark: **built** and measured (D5); 1,000 keys waits on U11.
 - **Exit:** scripts 1 and 2 run with the flex-pse hooks and with a user-written build/solve pair. Units round-trip.
 
-#### M3 — Query surface and study export/import (≈ 2 wks)
-- `orch.query()` (study or tenant scope), `orch.attr`, `orch.runs` / `orch.variables`, `orch.timeseries`,
-  `orch.sparql` (read-only), and `orch.acquirium`.
+#### M3 — Study export/import (≈ 1.5 wks)
 - `archive/` (D17):
   - the `flexorch-export/1` pydantic models, with their JSON Schemas published to `docs/schemas/`;
   - `export_study` / `export_result` (streaming, temp folder then rename, checksums, optional gzip);
   - `load_result`, and `import_study`;
   - CLI `export` / `import`.
 - **Exit:**
-  - The query examples run, and each query returns either frame type.
   - Script 1's study exports to a folder that matches the D17 layout and validates against the published schemas.
   - Importing it under a new name and exporting again gives files identical to the first export, apart from the
     provenance fields (run ids and timestamps).
@@ -1253,7 +1262,6 @@ under `examples/` runs from start to finish.
 - `server/`: a FastAPI app factory and the §4 routes:
   - a job queue (one runner per tenant; it runs `execute_study` on the tenant's Ray);
   - results JSON with pagination;
-  - a read-only `/query`;
   - 409 on duplicates, 202 plus a job id for anything long.
 - `auth.py` (D15): JWT checks against JWKS, the tenant claim and role per route; the static-token fallback.
   `Orchestrator(url=, token=)` client mode, and `flex-orch serve` / `flex-orch login`.
@@ -1314,8 +1322,8 @@ under `examples/` runs from start to finish.
   for `startup` / `shutdown`) as named Sets on the TimeBlock, built from `time_index`. Then the identity check finds
   them directly, and the `time_sets` hook no longer needs to know which Vars use them.
 - **U3 (Acquirium):** hard delete of studies and runs, cascading to observations, artifacts and streams; a
-  `superseded` status for runs; optionally a unique-name flag on `define`. When this lands, `purge` gets implemented.
-  **Partly in PR #78 `9a70a1f`:** `delete_runs`, `delete_study` and `clear` exist; review them for M1 tombstones.
+  `superseded` status for runs; optionally a unique-name flag on `define`. **Delete is in PR #78 `9a70a1f`**
+  (`delete_runs`, `delete_study`, `clear`) and D9 uses it; still open: a unique-name flag on `define`.
 - **U4 (Acquirium):** an optional auth hook / API-key middleware, as defence in depth inside the tenant network.
 - **U5 (Acquirium):** support `PG_DSN_FILE`; make sure the DSN is never logged; remove hard-coded credentials from
   the example configs.
@@ -1324,7 +1332,7 @@ under `examples/` runs from start to finish.
   `POST /admin/backup` endpoint, or storing artifacts in Postgres or S3.
 - Keep track of the PR #78 merge and release, then move the pin from a git SHA to a PyPI version.
 
-Rough total: **Phase 1 ≈ 15–17 weeks; Phase 2 ≈ 4–5 weeks** (one developer).
+Rough total: **Phase 1 ≈ 14–16 weeks; Phase 2 ≈ 4–5 weeks** (one developer).
 
 ---
 
@@ -1414,25 +1422,25 @@ that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` i
 
 | Area | Tests |
 |---|---|
-| Backend contract | One suite run against **both** backends: create, get and list studies; declare and record; latest-tag lookup; metadata filters; tombstone visibility; `include_deleted`. |
-| Uniqueness (D9) | `create_study` on an existing study raises an error; `select_study` on a missing study raises an error; an existing tag → `TagExistsError`; a failed run can be retried; `replace=True` tombstones and rewrites; the post-write check catches a simulated race; `on_existing` modes. |
-| Tombstones | a tombstoned item is hidden; `include_deleted` shows it; the tag can be reused; tombstones survive a Postgres-only restore; `purge` raises `NotImplementedError`; `deletion.mode=disabled` blocks deletion. |
+| Backend contract | One suite run against **both** backends: create, get and list studies; declare and record; tables; latest-tag lookup; metadata filters; deleting runs and studies (never a running one). |
+| Uniqueness (D9) | `create_study` on an existing study raises an error; `select_study` on a missing study raises an error; an existing tag → `TagExistsError`; a failed run can be retried; `replace=True` writes then deletes, and a failed replacement keeps the old item; the post-write check catches a simulated race (earliest wins; with `replace`, latest wins); `allow_delete=False` blocks deletion; `on_existing` modes. |
+| Deletion (D9) | `delete` removes every run of a tag (failed ones too) and frees it; `delete_study` removes the ledgers and the study, deselects it, and refuses while a run is running; deleting a running run is refused. |
 | Exporter (D3) | key and glob selection; time detection compares the **Set object itself** (a lookalike `Set(range(N))` is not time); time found among the factors of `(t, unit)` and `(unit, t)`; an unregistered subset of time is treated as custom; `datetime_index` mapping; time × custom → a series per value; custom-only → a scalar per element with `name[idx]` keys and `component`/`index` metadata; key collisions raise an error; `max_scalars_per_component`; stale values flagged; inactive components skipped. |
 | Units | keys generated from pint's parts for compound, prefixed, powered and currency units (`L/day`, `kW*h`, `J/kg/K`, `km**2`, `degC/h`, `USD/kWh`); units with no key warn once (cached) or raise in strict mode; overrides win; with a resolver, keys are verified (multiplier to 1 ppm), other part orderings are tried, unlisted bases are found (`psi`), wrong multipliers are rejected (the `a` → `ARE` case), offset answers can't stand for a part, and the whole-unit lookup is the last resort; **against real QUDT** (component): every base unit, and the generated keys for a list of real units; `conversion_factor`, including dimension-mismatch and offset-unit errors. |
 | Round-trip | export → store → read back: values and units are equal, for both frame kinds. |
 | Connection / credentials (D11) | mode selection and conflicting arguments; DSN escaping (`@:/%` in passwords); precedence between `*_FILE`, `FLEXORCH_*`, `PG*` and `.pgpass`; the DSN reaches the child process only through the environment, and the toml contains no `pg_dsn`; a **redaction test** that searches logs, exceptions, `server.log` and metadata for the password; a wrong password → `DBAuthError`; preflight failures; a second managed server is refused; `recreate` is rejected. |
-| Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from the flex-pse fixture models; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; tombstones are only exported with `include_deleted`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
+| Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from the flex-pse fixture models; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
 | Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. **Server (Phase 2):** every route under `/ext/<plugin>` returns 401 with no token and 403 with another tenant's token, **checked by walking every route the app registers**, so a new plugin route can't escape the check; the role in `@command(role=...)` is enforced on `/commands/{name}`; reserved prefixes are protected; plugin OpenAPI tags appear in the generated client; `create_app` is pure (two apps with different plugins don't affect each other); the isolation suite passes with a hostile plugin enabled. |
 | Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** `multilinear` and `constant_intensity` through `get_regressor` (the 0.2 types; the matrix grows with the pin); a reserved type gives a clear error naming the flex-pse version; QUDT to Pyomo conversion of column units, and an unmappable unit is an error; the hook's holdout metrics match a hand computation; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic linear data with known coefficients (ARMA data is added with U8). |
 | Hooks (D1) | callable, registered-name and import-string resolution; a bad import string gives a clear error; `SolveOutcome` failure handling. |
 | Specs (D2) | canonical hashing ignores key order and `1` vs `1.0`, and sees values and list order; a **pinned hash** guards the canonical form; `run_hash` over overrides; non-JSON values (sets, NaN, infinity) rejected; format detection; validators skipped when their library is missing; dict and pydantic forms store identical normalised JSON; normalisation is idempotent; kind/format mismatch rejected; tag rules; `SpecRecord` JSON round trip and `verify()` tamper check; a stored, normalised spec replays through `build`. |
 | Frames (D7) | polars ↔ pandas, DatetimeIndex restored, dtypes kept. |
-| Query (D8) | study scoping; read-only SPARQL rejects UPDATE; `runs.where` filters. |
+| Acquirium access (D8) | `orch.acquirium` is the Acquirium backend's client; the memory backend raises `StorageError`. |
 | Study config | schema validation, sweep expansion (product and zip), `output_name`, dry-run, resume. |
 | Parallel (D13) | `run_task` on its own (unit); Ray component tests: `TaskSpec` serialisation, a `__main__` hook rejected, a hung task killed at its timeout, retries, `on_error`, cancellation, `max_calls` restarts, thread env vars set, uniqueness with many tasks, **the same results with `max_workers=1` and `N`**. A multi-node per-tenant Ray integration test. |
 | **Isolation suite (D14)** | With tenants A and B: **(DB)** B's role can't `CONNECT` to A's database, and can't create databases or roles; **(secret)** A's secret file isn't mounted in B's containers, and isn't readable inside the orchestrator container; **(network)** B's orchestrator and Ray can't resolve or reach A's Acquirium, orchestrator or Ray, and nothing outside can reach either Acquirium; **(volume)** A's `data_dir` isn't mounted anywhere in B; **(compute)** a malicious hook in B (it tries to open A's hostnames and ports, read `/var/run/docker.sock`, and list mounts) finds nothing of A's; **(data)** a study and spec written in A are invisible from every B API; containers are non-root. Phase 2 adds the **(auth)** cases: B's token gets 403 on every A route; no token gets 401; an expired or bad-signature token gets 401; role checks per route; forged gateway headers are ignored. |
 | **Backup / restore** | drill: write known data into A → back up → destroy A → restore to a point in time in a scratch tenant → `verify` matches the studies, tags, a timeseries sample, the graph metadata and the file artifacts; a per-tenant `pg_dump` restore; a deprovision takes its final backup before dropping. |
-| Server (Phase 2) | FastAPI `TestClient`: auth and roles, 409 on duplicates, job lifecycle and cancel, results JSON shape (golden files), `/query`, SSE progress, OpenAPI schema snapshot. |
+| Server (Phase 2) | FastAPI `TestClient`: auth and roles, 409 on duplicates, job lifecycle and cancel, results JSON shape (golden files), SSE progress, OpenAPI schema snapshot. |
 | Examples | every `examples/*.py` runs as an `integration` test. |
 | Docs (§8) | the `flexorchdoc` table functions are unit-tested without Sphinx (field tables match the pydantic models, the env table matches `Settings`); `sphinx-build -W --keep-going` runs in CI; the scripts embedded on doc pages are the ones the integration tests run. |
 
@@ -1464,7 +1472,7 @@ docs/
     ten_minutes.md               # scripts 1 + 2: store data/specs, solve, store + read results (M2)
   explanation/
     architecture_and_layering.md          # library vs server, packages, import rules          (M0)
-    studies_tags_and_uniqueness.md        # D9/D10: studies, tags, duplicates, tombstones       (M1)
+    studies_tags_and_uniqueness.md        # D9/D10: studies, tags, duplicates, deletion         (M1)
     connection_modes_and_credentials.md   # D11: local / postgres / remote, secrets             (M1)
     storage_layout_in_acquirium.md        # D5/D10: what is stored where, backup coverage       (M1)
     model_data_export_and_units.md        # D3: time-set detection, keys, indexing, QUDT units  (M2)
@@ -1508,7 +1516,7 @@ docs/
     flex_orchestrator/server_deps.rst # Phase 2: create_app, deps for plugin routes
     cli.rst                      # flex-orch commands (generated from --help)
     http_api.rst                 # Phase 2: OpenAPI-generated route reference
-    glossary.md                  # study, tag, spec, run, tombstone, tenant, time set, …
+    glossary.md                  # study, tag, spec, run, snapshot, tenant, time set, …
 ```
 
 `index.rst` uses flex-pse's toctree captions in the same order: *Getting started · Explanation · How-to · Examples ·
@@ -1570,11 +1578,10 @@ small):
 | User hook code is arbitrary code | It runs only inside the tenant's own containers and Ray: non-root, no Docker socket, no route to other tenants. |
 | Shared Postgres cluster is a single point of failure | PITR backups, monitoring, and optionally a streaming replica. Per-tenant `pg_dump` for moving tenants elsewhere. |
 | Backups miss graph or artifacts (not in Postgres) | Volume snapshots plus the Oxigraph export taken with each database backup, a restore drill as an exit criterion, and U7 upstream. |
-| Tombstones lost in a restore | Tombstones live in the SQL ledger, not in graph metadata. |
+| A delete can't be undone | `replace` writes before deleting; `allow_delete=False` per deployment; backups (D14) restore deleted items. |
 | Database credentials leak | Secret files only, `SecretStr`, redaction everywhere, the redaction test, and U5. |
 | Two Acquirium servers on one database | One Acquirium per tenant database by construction, plus the mode 2 server lock. |
 | `recreate=true` drops data | Rejected by the orchestrator. The tenant role can only affect its own database, and backups cover it. |
-| No hard delete in Acquirium | Tombstone ledger, `purge` as a placeholder, and U3. |
 | Acquirium `define` silently returns an existing study | Check for existence first, verify after writing, and one writing process per tenant. |
 | A label's unit can't change | Convert to the declared unit, and raise an error if the dimensions don't match. |
 | Pyomo units with no QUDT match | Mapping table, resolver fallback, overrides, and strict mode. |

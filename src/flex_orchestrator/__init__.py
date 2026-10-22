@@ -35,6 +35,7 @@ __version__ = _dist_version("flex-orchestrator")
 _LAZY = {
     "export_model_data": "flex_orchestrator.export",
     "Orchestrator": "flex_orchestrator.orchestrator",
+    "ResultHandle": "flex_orchestrator.orchestrator",
     "StoredResult": "flex_orchestrator.orchestrator",
 }
 
@@ -59,6 +60,7 @@ __all__ = [
     "HookRegistry",
     "HookSet",
     "Orchestrator",
+    "ResultHandle",
     "SolveFn",
     "SolveOutcome",
     "SpecError",

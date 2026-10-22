@@ -133,7 +133,7 @@ def test_a_dataset_is_stored_once(memory_orch):
     with pytest.raises(TagExistsError, match="data 'biogas_data'"):
         memory_orch.store_data("biogas_data", biogas())
     # Datasets and results are separate kinds: the same tag is fine.
-    assert memory_orch._check_new("biogas_data") is None
+    assert memory_orch._check_new("biogas_data", "result") is None
 
 
 def test_missing_dataset_and_column(memory_orch):

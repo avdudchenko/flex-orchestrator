@@ -146,3 +146,18 @@ def test_acquirium_resolves_data_units(acquirium_local, study_name):
         "c": "GAL_US-PER-MIN",
         "d": "KiloW",
     }
+
+
+@pytest.mark.component
+def test_orch_acquirium_is_the_raw_client(acquirium_local, study_name, demo_model):
+    from flex_orchestrator.backend import AcquiriumBackend
+    from flex_orchestrator.orchestrator import Orchestrator
+
+    orch = Orchestrator(AcquiriumBackend(acquirium_local))
+    orch.create_study(study_name)
+    orch.store_model_results("base", demo_model, keys=["demo.pump.flow_in"])
+    assert orch.acquirium is acquirium_local
+    runs = orch.acquirium.study.get(f"{study_name}::runs").experiments.where(
+        metadata={"flexorch_kind": "result", "flexorch_tag": "base"}
+    )
+    assert [r.status for r in runs.all()] == ["succeeded"]

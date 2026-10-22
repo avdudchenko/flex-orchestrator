@@ -418,3 +418,49 @@ def test_store_model_data_takes_exported_values(memory_orch, demo_model):
         memory_orch.store_model_data("base", data)
     with pytest.raises(TypeError, match="SolveOutcome"):
         memory_orch.store_model_data("other", data, "ok")
+
+
+# Acquirium access (D8)
+
+
+def test_memory_backend_has_no_acquirium(memory_orch):
+    with pytest.raises(StorageError, match="needs the Acquirium backend"):
+        _ = memory_orch.acquirium
+
+
+# Result handles and frames (D7)
+
+
+def test_result_handles(memory_orch, demo_model):
+    import pandas as pd
+    import polars as pl
+
+    keys = [POWER, "costing.aggregate_power", "demo.pump.energy_intensity"]
+    memory_orch.store_model_results("a", demo_model, OK, keys=keys)
+    memory_orch.store_model_results("b", demo_model, keys=[POWER])
+    handles = memory_orch.stored_model_results()
+    assert [h.tag for h in handles] == ["a", "b"]
+    assert [h.tag for h in memory_orch.stored_model_results(tags=["b"])] == ["b"]
+
+    a = memory_orch.result("a")
+    exported = export_model_data(demo_model, keys=[POWER])[POWER]
+    df = a.to_polars()
+    assert isinstance(df, pl.DataFrame)
+    assert df.columns == ["time", POWER, "costing.aggregate_power[electrical]"]
+    assert df[POWER].to_list() == exported.values
+    pdf = a.to_pandas(units={POWER: "W"})
+    assert isinstance(pdf, pd.DataFrame) and str(pdf.index.tz) == "UTC"
+    assert pdf[POWER].tolist() == pytest.approx([v * 1000 for v in exported.values])
+    assert isinstance(a.to_frame(), pl.DataFrame)  # the orchestrator's default
+    assert a.scalars() == {"demo.pump.energy_intensity": 0.5}
+    assert a.units[POWER] == "kW"
+    assert a.outcome == OK
+    assert a.metadata["flexorch_tag"] == "a" and a.started_at is not None
+    assert memory_orch.result("b").outcome is None
+
+
+def test_a_frame_aligns_subsets_of_time(memory_orch, logic_model):
+    memory_orch.store_model_results("logic", logic_model, include=["p.ro*"])
+    df = memory_orch.result("logic").to_polars()
+    assert df["p.ro[0].startup"][0] is None  # startup has no first point
+    assert df.height == len(logic_model.time_block.time_index)

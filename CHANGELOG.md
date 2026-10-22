@@ -57,6 +57,18 @@
   (missing values are left out). The Acquirium backend declares units as QUDT
   URIs.
 - Acquirium pin moved to PR #78 `9a70a1f`.
+- `Orchestrator.acquirium`: the raw Acquirium client (PLAN.md D8); there
+  are no query wrappers.
+- Result handles (PLAN.md D7): `Orchestrator.result(tag)` and
+  `stored_model_results(tags=)` return `ResultHandle`s with `to_frame()`,
+  `to_polars()`, `to_pandas()`, `data(units=)`, `scalars()`, `units` and
+  `outcome`, read lazily from the snapshot.
+- Deletion and uniqueness (PLAN.md D9): `Orchestrator.delete(kind, tag)`,
+  `delete_study(name)`, `replace=True` on `store_model_results`,
+  `store_model_data`, `solve_and_store` and `store_data` (writes first, then
+  deletes the old item), `allow_delete=`, a per-study lock, and a post-write
+  check that removes a racing duplicate. Storage contract: `delete_runs` and
+  `delete_study`, using Acquirium PR #78's deletion.
 - Storage contract: `variables(study)` and `records(..., labels=)`.
 - An opt-in `benchmark` tier (`pytest -m benchmark -s`) with the D5 storage
   benchmark.

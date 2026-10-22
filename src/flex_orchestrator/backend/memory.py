@@ -162,6 +162,24 @@ class MemoryBackend:
         """Return every variable declared in the study."""
         return list(self._study(study).values())
 
+    def delete_runs(self, study: str, run_ids: Sequence[str]) -> None:
+        """Delete finished runs and everything they recorded."""
+        for run_id in run_ids:
+            entry = self._runs.get(run_id)
+            if entry is None or entry.study != study:
+                raise StorageError(f"Study {study!r} has no run {run_id!r}.")
+            if entry.run.status == "running":
+                raise StorageError(f"Run {run_id!r} is still running.")
+        for run_id in run_ids:
+            del self._runs[run_id]
+
+    def delete_study(self, name: str) -> None:
+        """Delete a study, its declarations and every run."""
+        self._study(name)
+        runs = [run_id for run_id, e in self._runs.items() if e.study == name]
+        self.delete_runs(name, runs)
+        del self._variables[name]
+
     def records(
         self, study: str, run_id: str, labels: Sequence[str] | None = None
     ) -> list[Record]:
