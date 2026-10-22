@@ -50,6 +50,13 @@ class StorageError(FlexOrchestratorError):
     """
 
 
+class DBAuthError(StorageError):
+    """Postgres refused the database login of a managed Acquirium (PLAN.md D11).
+
+    The message names the redacted ``user@host:port/db`` and never the password.
+    """
+
+
 class StudyExistsError(FlexOrchestratorError):
     """``create_study`` was given the name of a study that exists (PLAN.md D9)."""
 

@@ -15,6 +15,7 @@ from typing import Any
 import polars as pl
 
 from flex_orchestrator.backend.base import (
+    FileValue,
     Record,
     Role,
     Run,
@@ -62,6 +63,10 @@ class MemoryBackend:
         """Return whether the study exists."""
         return name in self._variables
 
+    def studies(self) -> list[str]:
+        """Return the names of every study, sorted."""
+        return sorted(self._variables)
+
     def variable(self, study: str, label: str) -> Variable | None:
         """Return the declaration of ``label``, or ``None``."""
         return self._study(study).get(label)
@@ -82,7 +87,7 @@ class MemoryBackend:
             StorageError: If ``label`` is declared differently, or a JSON or
                 table variable is given a unit.
         """
-        if kind in ("json", "table") and unit is not None:
+        if kind in ("json", "table", "file") and unit is not None:
             raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
         # Like Acquirium, None-valued metadata isn't kept.
         kept = {k: v for k, v in (metadata or {}).items() if v is not None}
@@ -110,8 +115,8 @@ class MemoryBackend:
         Raises:
             StorageError: If the run isn't running, ``label`` isn't declared, or
                 the value doesn't fit the kind: a timeseries row without a
-                value, a table that isn't a polars DataFrame, or a value that
-                isn't JSON (NaN included).
+                value, a table that isn't a polars DataFrame, a file that isn't
+                a FileValue, or a value that isn't JSON (NaN included).
         """
         entry = self._running(run_id)
         variable = self.variable(entry.study, label)
@@ -127,6 +132,10 @@ class MemoryBackend:
             if not isinstance(value, pl.DataFrame):
                 raise StorageError(f"Table {label!r} records a polars DataFrame.")
             entry.records[label] = Record(label, "table", value.clone())
+        elif variable.kind == "file":
+            if not isinstance(value, FileValue):
+                raise StorageError(f"File {label!r} records a FileValue.")
+            entry.records[label] = Record(label, "file", value)
         else:
             self._check_json(value)
             entry.records[label] = Record(label, variable.kind, copy.deepcopy(value))

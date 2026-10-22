@@ -12,3 +12,4 @@ htmlcov/
 docs/_build/
 .env
 .claude/
+.flexorch/

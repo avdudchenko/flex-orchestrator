@@ -42,8 +42,12 @@ forbidden_modules =
     acquirium
 
 [importlinter:contract:acquirium-only-in-backend]
-name = only backend.acquirium talks to Acquirium; the orchestrator uses hooks, not flex-pse
+name = only backend.acquirium and connection talk to Acquirium; the orchestrator uses hooks, not flex-pse
 type = forbidden
+# The orchestrator reaches Acquirium only through connection.connect (D11),
+# which imports Acquirium lazily and builds the backend.
+ignore_imports =
+    flex_orchestrator.orchestrator -> flex_orchestrator.connection
 source_modules =
     flex_orchestrator.orchestrator
     flex_orchestrator.results

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- The flex-pse spec validators dump with `by_alias=True`, so a `$source`
+  reference is stored as `{"$source": ...}`, not `{"source": ...}`.
+
 ### Added
 - User-replaceable build and solve hooks (PLAN.md D1): `BuildFn`, `SolveFn`,
   `ApplySurrogateFn` and `SwapSurrogateFn` protocols, `SolveOutcome`, `HookSet`,
@@ -70,6 +74,35 @@
   check that removes a racing duplicate. Storage contract: `delete_runs` and
   `delete_study`, using Acquirium PR #78's deletion.
 - Storage contract: `variables(study)` and `records(..., labels=)`.
+- Spec storage (PLAN.md D2, D10): `store_model_spec` (with `parent=`,
+  `base_dir=`, `assets=`), `store_surrogate_spec`, `model_spec`,
+  `surrogate_spec`, `stored_specs`, `apply_surrogate`, `materialize_spec` and
+  `build(tag, **overrides)`, in `<s>::specs`. Files a spec references (flex-pse
+  tariff and events files, `$source` data, or explicit JSON pointers) are
+  stored with it (`flex_orchestrator.assets`: `AssetRef`, `find_assets`,
+  `flexpse_assets`, `collect_assets`, `materialize_spec`), and
+  `SpecRecord.assets` / `record_hash` make the hash cover them. Results record
+  `model_spec_ref` and `overrides` inputs and `spec_tag` / `spec_hash` /
+  `run_hash` metadata; `ResultHandle.spec_tag`, `.overrides` and `.spec()`.
+- Storage contract: the `file` kind (`FileValue`) and `studies()`;
+  `Orchestrator.studies()` and `register_hooks()`.
+- `examples/ro_surrogates/`: one short script that stores synthetic RO data,
+  emits and stores a tariff-priced flex-pse model's spec, fits an average
+  energy intensity and a linear power surrogate, and compares the two; run as
+  an integration test (`test_examples.py`). An opt-in real-Postgres preflight
+  test (`FLEXORCH_TEST_PG`).
+- Connection modes (PLAN.md D11): `flex_orchestrator.connection` with
+  `connect()`, `Connection`, `DBCredentials`, `credentials_from_env`,
+  `postgres_dsn`, `redact` and `preflight`. `Orchestrator()` connects by itself
+  (local DuckDB in `.flexorch`, `db=` + `data_dir=` for Postgres, or
+  `acquirium_url=`), with `orch.connection`, `close()` and `with` support.
+  Postgres logins come from `FLEXORCH_DB_PASSWORD_FILE`,
+  `FLEXORCH_DB_USER` / `FLEXORCH_DB_PASSWORD` or libpq, never from code; the
+  password reaches the server only as `PGPASSWORD` in its environment. New
+  `DBAuthError`.
+- Run provenance (PLAN.md D10): run metadata records the flex-pse and
+  Acquirium versions, the user, the hooks (results) and the redacted
+  connection.
 - An opt-in `benchmark` tier (`pytest -m benchmark -s`) with the D5 storage
   benchmark.
 - The flex-pse `time_sets` hook returns `[]` for a model without exactly one

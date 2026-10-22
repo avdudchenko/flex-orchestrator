@@ -265,3 +265,34 @@ def test_delete_study(backend, study):
     assert not backend.has_study(study)
     backend.define_study(study)
     assert backend.variable(study, "x") is None
+
+
+def test_a_file_round_trips(backend, study):
+    from flex_orchestrator.backend import FileValue
+
+    data = b"utility,type\nelectric,energy\n\x00\xff"
+    backend.declare(study, "assets/abc-tariff.csv", role="input", kind="file")
+    run_id = backend.start_run(study, {})
+    backend.record(run_id, "assets/abc-tariff.csv", FileValue("tariff.csv", data))
+    backend.finish_run(run_id)
+    [record] = backend.records(study, run_id)
+    assert record.kind == "file"
+    assert record.value == FileValue("tariff.csv", data)
+    with pytest.raises(StorageError, match="can't have a unit"):
+        backend.declare(study, "other", role="input", kind="file", unit="KiloW")
+
+
+def test_a_file_must_be_a_file_value(backend, study):
+    backend.declare(study, "f", role="input", kind="file")
+    run_id = backend.start_run(study, {})
+    with pytest.raises(StorageError, match="FileValue"):
+        backend.record(run_id, "f", b"raw bytes")
+    backend.finish_run(run_id)
+
+
+def test_studies_lists_every_study(backend, study_name):
+    names = [f"{study_name}-a", f"{study_name}::runs"]
+    for name in names:
+        backend.define_study(name)
+    assert set(names) <= set(backend.studies())
+    assert backend.studies() == sorted(backend.studies())

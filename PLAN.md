@@ -128,7 +128,7 @@ class SolveFn(Protocol):
     `swap_surrogate` applies the same element to a live model with `flexops.apply_spec`.
 - Hooks can be passed in three ways:
   1. As callables to `execute_study(cfg, build=my_build, solve=my_solve)` or `Orchestrator(..., build=, solve=)`.
-  2. Registered by name with `orch.register_hooks("my_model", build=..., solve=...)`.
+  2. Registered by name with `orch.register_hooks("my_model", build=..., solve=...)` (**built**).
   3. As **import strings** in a study config, `build: "mypkg.models:build"`. Ray workers need this form (D13), and so
      does the Phase 2 HTTP API.
 - A user who writes their own `ExportFn` can store models that aren't Pyomo at all.
@@ -159,14 +159,13 @@ class SolveFn(Protocol):
   - **Tags** are 1–128 characters from `[A-Za-z0-9_.-]`, starting with a letter or digit, because they become
     Acquirium labels and the D17 export's file names.
   - Rendering templates such as `output_name` belongs to `StudyConfig` (M4), not `specs.py`.
-- **Referenced files (planned, M1).** A spec can point at files it doesn't embed, so the stored spec alone can't
+- **Referenced files (built, M1).** A spec can point at files it doesn't embed, so the stored spec alone can't
   rebuild the model. In a flex-pse flowsheet these are the costing element's `tariff_source` (a path, a list, or a
   `{name: path}` mapping) and `dr.events_source`, plus any `{"$source": "<path>"}` value: price values, `dispatch`
   values and `fix` values. flex-pse resolves them relative to the spec file's directory, or the working directory
   for a dict spec, which on Ray is the worker's. The plan:
-  - **Find them.** A per-format `assets` hook, next to the validator (`flex_orchestrator.flexpse:spec_assets`),
-    returns each reference as a JSON pointer plus the path. Generic `json` specs can declare theirs explicitly
-    (`store_model_spec(..., assets={"tariff": "path"})`).
+  - **Find them.** A per-format finder returns each reference as a JSON pointer plus the path. Generic `json` specs
+    name theirs explicitly, as JSON pointers to path strings (`store_model_spec(..., assets=["/site_file"])`).
   - **Store them with the spec.** `store_model_spec(tag, spec, base_dir=...)` reads each file and records it in
     `SpecRecord.assets` as `{pointer: {name, sha256, size}}`. It stores the bytes once per hash as `.file()` input
     observations (Acquirium artifacts), and stores the spec with each path rewritten to the asset's stable name
@@ -180,6 +179,30 @@ class SolveFn(Protocol):
     exported study rebuilds offline.
   - This is D2 work, not D3 (the exporter reads built models, not specs). It lands with spec storage in M1, because
     it needs Acquirium's file artifacts; the discovery hook and hashing can be built before that.
+
+**Built** (M1) in `flex_orchestrator.assets`, `spec_store` and `Orchestrator`:
+- `store_model_spec(tag, spec, *, parent=None, base_dir=None, assets=(), spec_format=None, replace=False)` and
+  `store_surrogate_spec(tag, spec, *, parent=None, ...)` return the `SpecRecord`. `model_spec(tag)`,
+  `surrogate_spec(tag)` and `stored_specs(kind)` read records back and check their hashes. `delete("model_spec",
+  tag)` and `replace=True` follow D9. A taken tag is refused before any file is read.
+- **Finding files:** `flexpse_assets` reads only the JSON, so it needs no flex-pse. It finds `tariff_source`
+  entries ending in `.json` / `.csv` (any other string is a historian tag), `dr.events_source`, and every
+  `{"$source": path}`.
+- **`SpecRecord.assets`** is `{pointer: AssetRef(name, sha256, size)}`. `record_hash` is `spec_hash(spec)` without
+  assets (the pinned hash holds) and `spec_hash({"spec", "assets": {pointer: sha256}})` with them.
+- **Derived specs.** `orch.apply_surrogate(base, unit=, surrogate=, relation=)` applies a stored surrogate to a
+  stored spec through the hook and returns the spec. `store_model_spec(..., parent=base)` reuses the parent's
+  stored files when the spec names them by their stored names. Without `parent=`, such a name is an error that
+  says so.
+- **Building.** `orch.build(tag, **overrides)` materializes the files into a temporary directory, calls the build
+  hook, and marks the model with `{tag, spec_hash, overrides}`. `orch.materialize_spec(tag, dir)` does the same for
+  a directory of your choice (Ray, D13).
+- **Normalisation fix.** The flex-pse validators dump with `by_alias=True`. Without it, `{"$source": ...}` was
+  stored as `{"source": ...}`: flex-pse still loads that, but it isn't the form flex-pse writes, and asset discovery
+  couldn't see it.
+- **Tested** on both backends: a spec with a tariff file, rebuilt from another working directory, gives the same
+  model, and editing the tariff changes `spec_hash` and the model; `$source` price files; surrogate specs and
+  derived specs; the kinds kept apart; results linked to their specs.
 
 **D3 — The orchestrator's own model data exporter, with units.** `export_model_data(model, keys=None, include=None,
 exclude=None, time_sets=None, datetime_index=None)` returns a `ModelData` object: a list of `ExportedSeries(key, kind,
@@ -321,7 +344,10 @@ settled:
   the SQL `metadata=` filter, not the graph; NaN is rejected by Acquirium's client, which the exporter already
   turns into `None`. Since PR #78 `9a70a1f`, a timeseries sample must have a value, so a native stream leaves
   out points with no value (the snapshot keeps them as nulls).
-- **Not yet:** run inputs (`model_spec_ref`, `overrides`) come with spec storage (M1).
+- **Run inputs (built, M1).** A model from `orch.build(tag, **overrides)` remembers its spec, and `spec=` /
+  `overrides=` on `store_model_results`, `store_model_data` and `solve_and_store` name it for a model built another
+  way. The result run records the inputs `model_spec_ref` (`{tag, spec_hash}`) and `overrides`, and the metadata
+  `spec_tag`, `spec_hash` and `run_hash`. `ResultHandle.spec_tag`, `.overrides` and `.spec()` read them back.
 
 **D5 — Whole results as an Acquirium table snapshot; chosen keys also native.**
 - A stored result keeps the whole export as one snapshot: `model_values` (`.table()`, Parquet inside Acquirium)
@@ -449,7 +475,7 @@ own rules.
 **Deletion** uses Acquirium's own (PR #78 `9a70a1f` added `delete_runs`, `delete_study` and `clear`; upstream item
 U3). Deleting removes the runs' observations, samples and unshared files for good; a running run is never deleted.
 - `orch.delete(kind, tag)` deletes every run with that kind and tag (failed attempts included), so the tag is free
-  again. `kind` is `"result"` or `"data"`; specs (M1) join them.
+  again. `kind` is `"result"`, `"data"`, `"model_spec"` or `"surrogate_spec"`.
 - `orch.delete_study(name)` deletes the study's ledger studies (`<s>::runs`, `<s>::data`, ...) and the study itself,
   and deselects it if selected. A running run anywhere in it stops the delete before anything is removed.
 - `store_*(tag, ..., replace=True)` writes the new item first, then deletes the old one, so a write that fails
@@ -476,6 +502,18 @@ backends). The race check is tested by letting a rival write land between the ta
 Every run's metadata also records the orchestrator, flex-pse and Acquirium versions, the user (from the environment
 in Phase 1, from the token in Phase 2), and the hook names, so a result can be reproduced.
 
+**Built** for `<s>`, `<s>::runs` and `<s>::data` (the `LEDGERS` map in `orchestrator.py`). Run metadata holds:
+- `flexorch_kind`, `flexorch_tag`;
+- `flexorch_version`, `flexpse_version`, `acquirium_version` (a package that isn't installed is left out);
+- `flexorch_user`: `FLEXORCH_USER`, else the login name;
+- `flexorch_hooks` (results only): `{slot: import string or registered name}` for every set hook, including a
+  `solve=` given to `solve_and_store`; a callable with no import string is recorded as `<qualname>`;
+- `flexorch_connection`: `{mode, target}` with the redacted target (D11), when the orchestrator made the connection.
+
+Tested on both backends, so the nested values round-trip through Acquirium's metadata. `<s>::specs` and the result
+inputs `model_spec_ref` / `overrides` are **built** (M1; see D2 and D4). **Not yet:** `<s>::fits` (D19), and the
+`solver events` log (with M4's study runner).
+
 **D11 — Connection modes and database credentials.** The library connects to exactly one Acquirium, which in
 deployment means one tenant. There are three modes:
 
@@ -499,7 +537,8 @@ orch = Orchestrator(acquirium_url="http://acquirium:8000")
 - **Mode 2 mechanics:**
   - build the DSN with `psycopg.conninfo.make_conninfo`;
   - write a toml with `timeseries_backend = "timescale"` and **no `pg_dsn`**;
-  - pass the DSN **only through the child process's environment** as `PG_DSN`, then call `aq.init(config=...)`;
+  - pass the DSN **only through the child process's environment** as `PG_DSN`, and the password separately as
+    `PGPASSWORD` (so the DSN itself never holds it), then call `aq.init(config=...)`;
   - never write the password to disk, never log it, and never record it in metadata (only a redacted
     `user@host/db`).
 - **Checks before starting (mode 2):**
@@ -510,6 +549,35 @@ orch = Orchestrator(acquirium_url="http://acquirium:8000")
 - **Never `recreate`.** The orchestrator never sets it, and rejects configs that do.
 - **Mode 3** needs no database credentials at all. In Phase 1 the network around the tenant stack is what protects
   Acquirium (D14). Phase 2 adds token auth at the orchestrator (D15).
+
+**Built** in `flex_orchestrator.connection`; `Orchestrator(backend=None, *, data_dir, db, acquirium_url,
+db_credentials)` calls `connect()`, and `orch.connection` / `orch.close()` / `with Orchestrator(...)` manage it.
+- **Modes.** Passing a backend together with connection arguments, `acquirium_url` with `db` / `data_dir`, or `db`
+  without `data_dir` raises `ValueError`. Mode 1 refuses a `data_dir` set up for Postgres, and mode 2 one that holds
+  a DuckDB store, so one directory never serves two different databases.
+- **Credentials** come from `credentials_from_env()` in the D11 order; `DBCredentials(user, password)` keeps the
+  password as a `SecretStr`. A password inside `db=` is refused, and the error doesn't repeat `db`.
+- **The password reaches the server as `PGPASSWORD`, not inside `PG_DSN`.** Acquirium logs
+  `dsn.split("@")[-1]` at debug level, which would print part of a password containing `@` (U14). Both variables
+  are set only while `aq.init` starts the child process, under a lock, and restored afterwards.
+- **Preflight** connects with psycopg (10 s timeout). A refused login is a `DBAuthError`, other connection failures
+  a `StorageError`, both with the password scrubbed and the original exception suppressed. Then it checks that
+  `timescaledb` is available (Acquirium runs `CREATE EXTENSION` itself) and that the role can create tables in its
+  schema.
+- **The server lock** is a one-row `flexorch_server` table that binds the database to `<hostname>:<data_dir>` the
+  first time. Another managed server on a different directory is refused, since the matching graph and files live in
+  the first one's. The binding is permanent; moving `data_dir` means updating that row by hand.
+- **The config** `flexorch-acquirium.toml` is written into `data_dir`, holding `timeseries_backend = "timescale"`,
+  `recreate = false`, `exact_only` and no `pg_dsn`. `aq.init` itself refuses `recreate` and strips inherited
+  `ACQUIRIUM_*` variables.
+- `settings.py` is folded into `connection.py`: plain environment reads and pydantic's `SecretStr`, with no
+  pydantic-settings dependency.
+- **Tested** in the unit tier with Postgres and `aq.init` faked, including a redaction test over the config,
+  exceptions, metadata and the process environment. A component test attaches mode 1 to the session's Acquirium.
+  Against a **real Postgres 18** (no TimescaleDB, a password with `@` and `:`): the login from
+  `FLEXORCH_DB_PASSWORD_FILE` reaches the extension check, and a wrong password gives `DBAuthError` without the
+  password (`test_connection_postgres.py`, opt-in with `FLEXORCH_TEST_PG`). **Not yet:** a full mode 2 run, which
+  needs TimescaleDB; there is no Windows build on conda-forge, so it waits for a Postgres in CI.
 
 **D17 — Study export to a folder (and import back).** `orch.export_study(path)` writes a self-contained folder that
 **mirrors the study's structure**: specs, data and model results, all as **JSON**. Index structure, units and
@@ -960,8 +1028,7 @@ src/flex_orchestrator/
   orchestrator.py        # facade: studies, store/get, results, `acquirium` (the raw client)
   results.py             # D3 step 4 writer: ModelData -> declarations + run records, and read back
   errors.py              # StudyExistsError, StudyNotFoundError, TagExistsError, UnitError, DBAuthError, ...
-  connection.py          # D11 modes: local / postgres / remote; DSN building, preflight, server lock
-  settings.py            # pydantic-settings: FLEXORCH_* env, *_FILE secrets, SecretStr, redaction
+  connection.py          # D11 modes: local / postgres / remote; env and *_FILE secrets, DSN, preflight, server lock
   frames.py              # polars/pandas conversion (D7)
   hooks.py               # BuildFn/SolveFn/ExportFn protocols, SolveOutcome, import-string resolution, registry
   specs.py               # spec hashing, canonical JSON, template overrides (format-agnostic)
@@ -1117,6 +1184,13 @@ Phase 2, the HTTP API (every route needs a valid tenant JWT, D15):
 Each milestone ends when its exit criterion is met, its **pytest suite passes in CI** (§7), and an example script
 under `examples/` runs from start to finish.
 
+**Built so far:** `examples/ro_surrogates/example.py`, one script with no options, on a local Acquirium. It stores
+synthetic RO data generated from a parabolic specific-energy curve, builds a tariff-priced feed → RO → tank →
+product model in Python, emits its spec (`emit_model`) and stores it, fits an average intensity
+(`ConstantIntensityRegressor`) and a linear power surrogate (`LinearRegressor`), solves the model with each, and
+compares each model's RO energy with the true curve. `test_examples.py` runs it (integration tier). The
+dict-driven version of the same experiment waits for `execute_study` (M4).
+
 ### Phase 1: core library
 
 #### M0 — Repo scaffold, environments, test harness (≈ 1 wk)
@@ -1139,18 +1213,15 @@ under `examples/` runs from start to finish.
   job.
 
 #### M1 — Storage backend, connections, specs (≈ 1.5 wks)
-- The `StorageBackend` protocol, plus the memory and Acquirium backends (D10). **Built** for runs, variables and
-  results (D4), datasets (D6) and deletion (D9); M1 adds what specs need.
-- `connection.py` / `settings.py` (D11):
-  - the three modes, with credentials from env or secret file and `SecretStr`;
-  - checks before starting, and the server lock;
-  - rejecting `recreate`;
-  - redaction.
-- Study create, select and list with the D9 guards. Tagged stores for specs and data (`units=`, polars or pandas
-  input).
-- Referenced spec files (D2): the flex-pse `spec_assets` hook, assets stored as `.file()` inputs, `spec_hash`
-  covering asset hashes, and `materialize_spec` for replay.
-- D9 uniqueness, deletion and `replace=True`: **built** for results and datasets; specs join with spec storage.
+- The `StorageBackend` protocol, plus the memory and Acquirium backends (D10): **built**, including the `file`
+  kind (`FileValue`, an Acquirium artifact) and `studies()` that specs need.
+- `connection.py` (D11): **built**: the three modes, credentials from env or secret file as `SecretStr`, checks
+  before starting, the server lock, `recreate` never set, redaction. Left: a run against a real TimescaleDB.
+- Study create, select and list (`orch.studies()`) with the D9 guards. Tagged stores for specs and data
+  (`units=`, polars or pandas input): **built**.
+- Referenced spec files (D2): finders, assets stored as `file` inputs, `spec_hash` covering asset hashes, and
+  `materialize_spec` / `build` for replay: **built**.
+- D9 uniqueness, deletion and `replace=True`: **built** for results, datasets and specs.
 - `frames.py` and result handles (D7): **built**.
 - **Exit:**
   - Script 1 up to `store_model_spec` works in modes 1, 2 and 3.
@@ -1158,16 +1229,25 @@ under `examples/` runs from start to finish.
     the tariff file changes `spec_hash`.
   - A wrong password gives `DBAuthError`, and the password never appears in logs or metadata.
   - The contract and duplicate tests pass.
+- **Status:** met apart from one item, checked on 2026-10-22 with quickstart scripts 1 and 2 in modes 1 and 3
+  (since removed for the simpler `examples/ro_surrogates/`, so modes 2 and 3 are no longer run by an example); the tariff
+  spec rebuilds from another directory to the same model and an edited tariff changes the hash (both backends);
+  `DBAuthError` is checked against a real Postgres. **Open:** mode 2 end to end, which needs a TimescaleDB-enabled
+  Postgres (CI, or a Linux/WSL host); the test is in place behind `FLEXORCH_TEST_DB`.
 
 #### M2 — Model data exporter, units, results (≈ 3 wks)
 - `export.walker`: key and pattern selection, identity-based time-set detection, product sets split into time and
   custom factors, and `name[idx]` scalars.
 - `export.units`: the mapping table, resolver fallback, overrides, strict mode, and converting to the declared unit.
-- The writer (D3 step 4), `store_model_results` and `solve_and_store`: **built** (D4). Still to do:
-  `stored_model_results` and `ResultHandle.to_frame/to_pandas/to_polars` (on `model_results`).
-- Default flex-pse hooks and `SolveOutcome`.
+- The writer (D3 step 4), `store_model_results`, `solve_and_store`, `stored_model_results` and the
+  `ResultHandle` frames: **built** (D4, D7).
+- Default flex-pse hooks and `SolveOutcome`: **built** (D1).
 - The D5 benchmark: **built** and measured (D5); 1,000 keys waits on U11.
 - **Exit:** scripts 1 and 2 run with the flex-pse hooks and with a user-written build/solve pair. Units round-trip.
+- **Status: exit met** on 2026-10-22: quickstart scripts 1 and 2 ran with flex-pse's hooks and with a plain Pyomo
+  build/solve pair; script 2 checked each key's unit, converted kW to W, and re-solved each result from its stored
+  spec and overrides. The scripts were then removed for the simpler `examples/ro_surrogates/`. The user-hook path
+  is still covered by the component tests; an end-to-end run of it isn't.
 
 #### M3 — Study export/import (≈ 1.5 wks)
 - `archive/` (D17):
@@ -1318,6 +1398,20 @@ under `examples/` runs from start to finish.
 - **U13 (Acquirium, bugs found on `9a70a1f`):** `declare_from` with 100 adapter variables made
   `/experiments/metadata/sync` fail with "maximum recursion depth exceeded" on a fresh server (50 worked). Report
   on PR #78.
+- **U14 (Acquirium):** `create_timeseries_store` logs `pg_dsn.split("@")[-1]` at debug level; for a key=value DSN
+  whose password contains `@`, that prints the rest of the password. Log the parsed host instead. D11 works around
+  it by passing the password as `PGPASSWORD`.
+- **U15 (flex-pse, found by the RO example):**
+  - `flexcore.solvers.classify` reports a model with inline `energy_prices` as NLP: the price's `kWh**-1` units
+    make Pyomo's `polynomial_degree()` return `None` for `costing.opex.eq_electricity_cost`. So `solve(prefer=
+    "highs")` falls back to ipopt even for an LP (DEMO_SPEC included). Tariff-file pricing classifies as LP.
+  - The new-style HiGHS interface raises `NoFeasibleSolutionError` on an infeasible model instead of returning a
+    termination, so `run_solve` records `error` rather than `failed`.
+  - `Tank`'s holdup equation starts at `t = 1`, so the `t = 0` flows don't touch the volume, and there is no
+    terminal-volume option; the example adds both constraints in a spec extension.
+  - Multilinear surrogate inputs must be time-indexed, so a scalar `recovery` can't be one; `quadratic` and
+    `exponential` surrogates are `NotImplementedError`. The example ties `energy_intensity` to `recovery` in an
+    extension instead.
 - **U10 (flex-pse):** declare the partial-horizon Sets that logic uses (e.g. `time_block.time_index_after_first`
   for `startup` / `shutdown`) as named Sets on the TimeBlock, built from `time_index`. Then the identity check finds
   them directly, and the `time_sets` hook no longer needs to know which Vars use them.
@@ -1553,7 +1647,7 @@ small):
 - **Code style:** black and ruff exactly as in flex-pse (D20). Install the hooks once with
   `pre-commit install --hook-type pre-commit --hook-type pre-push`. Never use `--no-verify` to get a commit through.
   PRs that only reformat stay separate from PRs that change behaviour.
-- **Security review:** any PR that touches `connection.py`, `settings.py`, `deploy/tenant/` or `server/auth.py` needs
+- **Security review:** any PR that touches `connection.py`, `deploy/tenant/` or `server/auth.py` needs
   a second reviewer, and must keep the isolation suite and the redaction test passing.
 - **Extension API changes:** any change to `ext/`, `testing/` or `server/deps.py` updates `PLUGIN_API_VERSION`
   (a breaking change bumps the major version) and records it in the changelog. The sample plugin must keep passing.

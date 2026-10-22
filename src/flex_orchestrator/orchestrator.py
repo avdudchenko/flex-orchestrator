@@ -5,20 +5,32 @@ tag, and there is no "current model" (PLAN.md D4). A study ``s`` is laid out as
 backend studies (D10): ``s`` itself; ``s::runs``, where each stored result is
 one run carrying ``{flexorch_kind: "result", flexorch_tag: tag}``, the model
 snapshot (:mod:`flex_orchestrator.results`), any values stored natively, and
-the ``solve_outcome`` JSON; and ``s::data``, where each dataset is one run (D6,
-:mod:`flex_orchestrator.data`).
+the ``solve_outcome`` JSON; ``s::data``, where each dataset is one run (D6,
+:mod:`flex_orchestrator.data`); and ``s::specs``, where each model or
+surrogate spec is one run with the files it references (D2,
+:mod:`flex_orchestrator.spec_store`). Every run's metadata also records the versions,
+the user, the hooks and the connection, so a result can be reproduced.
+
+Without a backend, the orchestrator connects to Acquirium itself, in one of
+the D11 modes (:mod:`flex_orchestrator.connection`).
 """
 
+import copy
+import getpass
+import os
+import tempfile
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from importlib.metadata import version
+from dataclasses import dataclass, field, fields
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal
 
 from flex_orchestrator import data as datasets
-from flex_orchestrator import frames, results
+from flex_orchestrator import frames, results, spec_store
+from flex_orchestrator.assets import collect_assets, find_assets, materialize_spec
 from flex_orchestrator.backend.base import StorageBackend, to_utc
+from flex_orchestrator.connection import Connection, DBCredentials, connect
 from flex_orchestrator.data import DATA_KIND, StoredData
 from flex_orchestrator.errors import (
     AmbiguousColumnError,
@@ -35,14 +47,33 @@ from flex_orchestrator.hooks import (
     HookRegistry,
     HookSet,
     SolveOutcome,
+    hook_ref,
     run_solve,
 )
 from flex_orchestrator.results import MODEL_MANIFEST, MODEL_VALUES
-from flex_orchestrator.specs import check_tag
+from flex_orchestrator.specs import (
+    SpecKind,
+    SpecRecord,
+    check_tag,
+    normalise_spec,
+    run_hash,
+    to_json_spec,
+)
 
 RESULT_KIND = "result"
-LEDGERS = {RESULT_KIND: "runs", DATA_KIND: "data"}
+MODEL_SPEC = "model_spec"
+SURROGATE_SPEC = "surrogate_spec"
+LEDGERS = {
+    RESULT_KIND: "runs",
+    DATA_KIND: "data",
+    MODEL_SPEC: "specs",
+    SURROGATE_SPEC: "specs",
+}
 """dict: Item kind -> the ledger study (``<s>::<ledger>``) that holds it (D10)."""
+MODEL_SPEC_REF = "model_spec_ref"
+"""str: The label of a result's JSON input naming the spec it was built from."""
+OVERRIDES = "overrides"
+"""str: The label of a result's JSON input holding the build overrides."""
 SOLVE_OUTCOME = "solve_outcome"
 """str: The label of the JSON output that holds a result's solve outcome."""
 
@@ -158,6 +189,29 @@ class ResultHandle:
         return {s.key: s.unit_pyomo for s in self.data()}
 
     @property
+    def spec_tag(self) -> str | None:
+        """The tag of the model spec the result was built from, if recorded."""
+        return self.metadata.get("spec_tag")
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The build overrides recorded with the spec (``{}`` if none)."""
+        found = self._orch.backend.records(
+            self._orch._runs, self.run_id, labels=[OVERRIDES]
+        )
+        return dict(found[0].value) if found else {}
+
+    def spec(self) -> SpecRecord:
+        """Return the model spec the result was built from.
+
+        Raises:
+            TagNotFoundError: If no spec was recorded, or it was deleted.
+        """
+        if self.spec_tag is None:
+            raise TagNotFoundError(f"Result {self.tag!r} records no model spec.")
+        return self._orch.model_spec(self.spec_tag)
+
+    @property
     def outcome(self) -> SolveOutcome | None:
         """The solve outcome stored with the result, if any."""
         stored = self._snapshot()[1]
@@ -171,10 +225,25 @@ class ResultHandle:
 class Orchestrator:
     """Studies, model results and hooks on one storage backend.
 
+    Without ``backend``, it connects to Acquirium in one of three modes (D11):
+
+    - ``Orchestrator()``: a local managed Acquirium with DuckDB in
+      ``data_dir`` (``.flexorch`` by default);
+    - ``Orchestrator(db="postgresql://host/db", data_dir=...)``: a managed
+      Acquirium on Postgres, with the login from ``FLEXORCH_DB_PASSWORD_FILE``,
+      ``FLEXORCH_DB_USER`` / ``FLEXORCH_DB_PASSWORD`` or libpq's ``PG*`` /
+      ``~/.pgpass``, never from script code;
+    - ``Orchestrator(acquirium_url="http://acquirium:8000")``: a running one.
+
     Args:
         backend: The store, e.g. :class:`~flex_orchestrator.backend.MemoryBackend`
-            or :class:`~flex_orchestrator.backend.AcquiriumBackend`.
+            or :class:`~flex_orchestrator.backend.AcquiriumBackend`. Leave it
+            out to connect with the arguments below.
         study: A study to select; it must exist.
+        data_dir: The managed Acquirium's directory (modes 1 and 2).
+        db: A Postgres URL without a password (mode 2).
+        acquirium_url: A running Acquirium (mode 3).
+        db_credentials: An explicit Postgres login, for developers and tests.
         hooks: Hooks that replace the flex-pse defaults, slot by slot.
         registry: Where registered hook names resolve.
         unit_mapper: Maps Pyomo units to QUDT. By default it verifies keys
@@ -195,9 +264,13 @@ class Orchestrator:
 
     def __init__(
         self,
-        backend: StorageBackend,
+        backend: StorageBackend | None = None,
         *,
         study: str | None = None,
+        data_dir: str | os.PathLike[str] | None = None,
+        db: str | None = None,
+        acquirium_url: str | None = None,
+        db_credentials: DBCredentials | None = None,
         hooks: HookSet | None = None,
         registry: HookRegistry | None = None,
         unit_mapper: UnitMapper | None = None,
@@ -206,6 +279,20 @@ class Orchestrator:
         allow_delete: bool = True,
     ) -> None:
         """Set up the orchestrator; see the class docstring for the arguments."""
+        self.connection: Connection | None = None
+        if backend is None:
+            self.connection = connect(
+                data_dir=data_dir,
+                db=db,
+                acquirium_url=acquirium_url,
+                db_credentials=db_credentials,
+            )
+            backend = self.connection.backend()
+        elif any(a is not None for a in (data_dir, db, acquirium_url, db_credentials)):
+            raise ValueError(
+                "Pass either a backend or connection arguments (data_dir, db, "
+                "acquirium_url, db_credentials), not both."
+            )
         self.backend = backend
         self.hooks = DEFAULT_HOOKS.merged(hooks) if hooks else DEFAULT_HOOKS
         self.registry = registry or HookRegistry()
@@ -221,8 +308,26 @@ class Orchestrator:
         self._study: str | None = None
         self._locks: dict[str, threading.RLock] = {}
         self._locks_lock = threading.Lock()
+        self._call = threading.local()
         if study is not None:
             self.select_study(study)
+
+    def close(self) -> None:
+        """Disconnect from an Acquirium this orchestrator connected to.
+
+        A managed server this process started is stopped; its data is kept.
+        A backend that was passed in is left alone.
+        """
+        if self.connection is not None:
+            self.connection.close()
+
+    def __enter__(self) -> "Orchestrator":
+        """Return the orchestrator; :meth:`close` runs on exit."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the connection (see :meth:`close`)."""
+        self.close()
 
     @property
     def acquirium(self) -> Any:
@@ -294,6 +399,21 @@ class Orchestrator:
             return self.select_study(name)
         return self.create_study(name)
 
+    def studies(self) -> list[str]:
+        """Return the names of the orchestrator studies in the store, sorted.
+
+        The ledger studies (``<s>::runs`` and so on) aren't listed.
+        """
+        return [name for name in self.backend.studies() if "::" not in name]
+
+    def register_hooks(self, name: str, **hooks: Any) -> HookSet:
+        """Register a named set of hooks (D1), e.g. ``build=my_build``.
+
+        A :class:`HookSet` slot, or ``build(..., build="name")``, can then refer
+        to it by name. See :meth:`HookRegistry.register`.
+        """
+        return self.registry.register(name, **hooks)
+
     def delete_study(self, name: str) -> None:
         """Delete a study and everything stored in it, for good.
 
@@ -310,7 +430,7 @@ class Orchestrator:
         if not self.backend.has_study(name):
             raise StudyNotFoundError(f"There is no study {name!r}.")
         with self._lock(name):
-            ledgers = [self._ledger(name, ledger) for ledger in LEDGERS.values()]
+            ledgers = [self._ledger(name, ledger) for ledger in _ledger_names()]
             present = [ledger for ledger in ledgers if self.backend.has_study(ledger)]
             for ledger in present:
                 if self.backend.runs(ledger, status="running"):
@@ -328,8 +448,9 @@ class Orchestrator:
         """Delete a stored item, for good: every run with this kind and tag.
 
         Args:
-            kind: ``"result"`` or ``"data"``.
-            tag: The item's tag (a result tag or a dataset name).
+            kind: ``"result"``, ``"data"``, ``"model_spec"`` or
+                ``"surrogate_spec"``.
+            tag: The item's tag (a result or spec tag, or a dataset name).
 
         Returns:
             How many runs were deleted (failed attempts included).
@@ -349,6 +470,233 @@ class Orchestrator:
                 )
             self.backend.delete_runs(ledger, [run.run_id for run in found])
         return len(found)
+
+    # Specs (D2)
+
+    def store_model_spec(
+        self,
+        tag: str,
+        spec: Any,
+        *,
+        parent: str | None = None,
+        base_dir: str | os.PathLike[str] | None = None,
+        assets: Iterable[str] = (),
+        spec_format: str | None = None,
+        replace: bool = False,
+    ) -> SpecRecord:
+        """Store a model spec, with the files it references, under ``tag``.
+
+        The spec is validated and normalised by its format's validator when
+        that library is installed (a flex-pse spec gets its defaults written
+        out). Every file it references (for flex-pse: tariff and events files
+        and ``{"$source": path}`` data) is read and stored with it, and its
+        path in the stored spec becomes the file's stored name, so the spec
+        rebuilds anywhere (:meth:`build`). The hash covers the files too:
+        editing a tariff changes ``spec_hash``.
+
+        Args:
+            tag: The spec's tag, unique among the study's model specs.
+            spec: A dict or pydantic model.
+            parent: The tag of the model spec this one was derived from. Files
+                the parent stored are reused when the spec names them by their
+                stored names, as :meth:`apply_surrogate`'s specs do.
+            base_dir: The directory relative file paths resolve against; the
+                working directory by default (flex-pse's rule for a dict spec).
+            assets: More file references, as JSON pointers to path strings,
+                for a format the orchestrator can't search.
+            spec_format: The format; detected from the spec when omitted.
+            replace: Replace a stored spec with this tag (D9).
+
+        Returns:
+            The stored record.
+
+        Raises:
+            TagExistsError: If a model spec with this tag is stored.
+            TagNotFoundError: If ``parent`` isn't a stored model spec.
+            SpecError: If the spec is invalid or a referenced file can't be read.
+        """
+        return self._store_spec(
+            MODEL_SPEC, tag, spec, parent, base_dir, assets, spec_format, replace
+        )
+
+    def store_surrogate_spec(
+        self,
+        tag: str,
+        spec: Any,
+        *,
+        parent: str | None = None,
+        spec_format: str | None = None,
+        replace: bool = False,
+    ) -> SpecRecord:
+        """Store a surrogate spec under ``tag``.
+
+        Args:
+            tag: The spec's tag, unique among the study's surrogate specs.
+            spec: A dict or pydantic model (for flex-pse, a ``SurrogateSpec``).
+            parent: The tag of the surrogate spec this one was derived from.
+            spec_format: The format; detected from the spec when omitted.
+            replace: Replace a stored spec with this tag (D9).
+
+        Raises:
+            TagExistsError: If a surrogate spec with this tag is stored.
+            SpecError: If the spec is invalid.
+        """
+        return self._store_spec(
+            SURROGATE_SPEC, tag, spec, parent, None, (), spec_format, replace
+        )
+
+    def model_spec(self, tag: str) -> SpecRecord:
+        """Return a stored model spec, checked against its hash.
+
+        Raises:
+            TagNotFoundError: If there is none with this tag.
+        """
+        return self._read_spec(MODEL_SPEC, tag)[0]
+
+    def surrogate_spec(self, tag: str) -> SpecRecord:
+        """Return a stored surrogate spec, checked against its hash.
+
+        Raises:
+            TagNotFoundError: If there is none with this tag.
+        """
+        return self._read_spec(SURROGATE_SPEC, tag)[0]
+
+    def stored_specs(self, kind: SpecKind = MODEL_SPEC) -> list[SpecRecord]:
+        """Return the study's stored specs of one kind, oldest first."""
+        ledger = self._ledger(self.study, LEDGERS[_spec_kind(kind)])
+        return [
+            spec_store.read(self.backend, ledger, run.run_id)[0]
+            for run in self.backend.runs(
+                ledger, status="succeeded", metadata={"flexorch_kind": kind}
+            )
+        ]
+
+    def materialize_spec(self, tag: str, directory: str | os.PathLike[str]) -> dict:
+        """Write a stored model spec's files to ``directory``; return the spec.
+
+        The returned spec points at the written files by absolute path, so the
+        build hook can read them from any working directory (or Ray worker).
+        """
+        record, files = self._read_spec(MODEL_SPEC, tag)
+        return materialize_spec(record.spec, record.assets, files, directory)
+
+    def build(self, tag: str, *, build: Any = None, **overrides: Any) -> Any:
+        """Build the model a stored spec describes.
+
+        The spec's files are written to a temporary directory for the build,
+        so it doesn't matter where they were when the spec was stored. The
+        model remembers the spec tag, hash and overrides, so storing its
+        results links them to the spec (D10).
+
+        Args:
+            tag: The model spec's tag.
+            build: The build hook; the orchestrator's by default.
+            **overrides: Passed to the build hook (for flex-pse, ``fix``
+                elements: ``{"plant.ro.recovery": 0.6}``).
+
+        Raises:
+            TagNotFoundError: If the spec isn't stored.
+            SpecError: If ``overrides`` aren't JSON.
+        """
+        hook = self.registry.resolve_ref(build or self.hooks.build, "build")
+        record, files = self._read_spec(MODEL_SPEC, tag)
+        link = {
+            "tag": tag,
+            "spec_hash": record.spec_hash,
+            "overrides": to_json_spec(overrides),
+        }
+        with tempfile.TemporaryDirectory(prefix="flexorch-spec-") as directory:
+            spec = materialize_spec(record.spec, record.assets, files, directory)
+            model = hook(spec, **overrides)
+        try:
+            model._flexorch_spec = link
+        except (AttributeError, TypeError):  # pragma: no cover - a frozen model
+            pass
+        return model
+
+    def apply_surrogate(
+        self,
+        base: str,
+        *,
+        unit: str,
+        surrogate: str,
+        relation: str | None = None,
+    ) -> dict:
+        """Return a stored model spec with a stored surrogate applied to a unit.
+
+        Calls the ``apply_surrogate`` hook (D1); the result isn't stored. Store
+        it with ``store_model_spec(tag, spec, parent=base)``, which reuses the
+        base spec's files.
+
+        Args:
+            base: The model spec's tag.
+            unit: The unit to apply it to, e.g. ``"plant.digester"``.
+            surrogate: The surrogate spec's tag.
+            relation: The relation it replaces; the hook's default if omitted.
+        """
+        hook = self.registry.resolve_ref(self.hooks.apply_surrogate, "apply_surrogate")
+        spec = copy.deepcopy(self.model_spec(base).spec)
+        return hook(spec, unit, self.surrogate_spec(surrogate).spec, relation)
+
+    def _store_spec(
+        self,
+        kind: SpecKind,
+        tag: str,
+        spec: Any,
+        parent: str | None,
+        base_dir: Any,
+        pointers: Iterable[str],
+        spec_format: str | None,
+        replace: bool,
+    ) -> SpecRecord:
+        # Refuse a taken tag before reading any files; _guarded checks it
+        # again, under the lock, when it writes.
+        self._check_new(tag, kind, replace)
+        known: dict[str, tuple[Any, bytes]] = {}
+        if parent is not None:
+            parent_record, parent_files = self._read_spec(kind, parent)
+            known = {
+                ref.name: (ref, parent_files[ref.name])
+                for ref in parent_record.assets.values()
+            }
+        data, spec_format = normalise_spec(kind, spec, spec_format)
+        references = find_assets(data, spec_format, pointers)
+        data, refs, files = collect_assets(data, references, base_dir, known)
+        record = SpecRecord.create(
+            kind,
+            tag,
+            data,
+            parent_tag=parent,
+            spec_format=spec_format,
+            validate=False,
+            assets=refs,
+        )
+        ledger = self._ledger(self.study, LEDGERS[kind])
+
+        def write() -> _Written:
+            metadata = {**self._metadata(tag, kind), **record.metadata()}
+            run_id = spec_store.write(self.backend, ledger, record, files, metadata)
+            return _Written(run_id)
+
+        self._guarded(kind, tag, replace, write)
+        return record
+
+    def _read_spec(self, kind: str, tag: str) -> tuple[SpecRecord, dict[str, bytes]]:
+        run = self._latest(tag, kind)
+        ledger = self._ledger(self.study, LEDGERS[kind])
+        return spec_store.read(self.backend, ledger, run.run_id)
+
+    def _spec_link(
+        self, model: Any, spec: str | None, overrides: Mapping[str, Any] | None
+    ) -> "_SpecLink | None":
+        """The spec a result was built from: given, or remembered by build()."""
+        if spec is not None:
+            record = self.model_spec(spec)
+            return _SpecLink(spec, record.spec_hash, to_json_spec(overrides or {}))
+        built = getattr(model, "_flexorch_spec", None)
+        if isinstance(built, Mapping):
+            return _SpecLink(built["tag"], built["spec_hash"], built["overrides"])
+        return None
 
     # Datasets (D6)
 
@@ -473,6 +821,8 @@ class Orchestrator:
         replace: bool = False,
         time_sets: Sequence[Any] | None = None,
         datetime_index: Sequence[Any] | None = None,
+        spec: str | None = None,
+        overrides: Mapping[str, Any] | None = None,
     ) -> StoredResult:
         """Export a model's values and store them under ``tag``.
 
@@ -502,6 +852,10 @@ class Orchestrator:
                 Sets of startup/shutdown).
             datetime_index: One datetime per time point, for models whose time
                 block doesn't have them.
+            spec: The tag of the model spec the model was built from. A model
+                from :meth:`build` remembers its spec, so this is only needed
+                for models built another way.
+            overrides: The build overrides used with ``spec``.
 
         Returns:
             What was stored.
@@ -509,10 +863,12 @@ class Orchestrator:
         Raises:
             TagExistsError: If a result with this tag is running or succeeded
                 (and ``replace`` is false).
+            TagNotFoundError: If ``spec`` isn't a stored model spec.
             ExportError, StorageError, UnitError: If the values can't be
                 exported or stored.
         """
         _check_outcome(outcome)
+        link = self._spec_link(model, spec, overrides)
 
         def write() -> StoredResult:
             data = None
@@ -528,7 +884,7 @@ class Orchestrator:
                     datetime_index=datetime_index,
                     unit_mapper=self.unit_mapper,
                 )
-            return self._store(tag, data, outcome, streams)
+            return self._store(tag, data, outcome, streams, link)
 
         return self._guarded(RESULT_KIND, tag, replace, write)
 
@@ -540,6 +896,8 @@ class Orchestrator:
         *,
         streams: Iterable[str] | None = None,
         replace: bool = False,
+        spec: str | None = None,
+        overrides: Mapping[str, Any] | None = None,
     ) -> StoredResult:
         """Store values that are already exported under ``tag``.
 
@@ -555,6 +913,9 @@ class Orchestrator:
             streams: Values to also store natively; see
                 :meth:`store_model_results`.
             replace: Replace a stored result; see :meth:`store_model_results`.
+            spec: The model spec the values came from; see
+                :meth:`store_model_results`.
+            overrides: The build overrides used with ``spec``.
 
         Returns:
             What was stored.
@@ -566,8 +927,12 @@ class Orchestrator:
                 stored.
         """
         _check_outcome(outcome)
+        link = self._spec_link(None, spec, overrides)
         return self._guarded(
-            RESULT_KIND, tag, replace, lambda: self._store(tag, data, outcome, streams)
+            RESULT_KIND,
+            tag,
+            replace,
+            lambda: self._store(tag, data, outcome, streams, link),
         )
 
     def solve_and_store(
@@ -583,6 +948,8 @@ class Orchestrator:
         solve: Any = None,
         time_sets: Sequence[Any] | None = None,
         datetime_index: Sequence[Any] | None = None,
+        spec: str | None = None,
+        overrides: Mapping[str, Any] | None = None,
         **options: Any,
     ) -> StoredResult:
         """Solve a model and store its results under ``tag``.
@@ -604,6 +971,8 @@ class Orchestrator:
                 name); the orchestrator's ``solve`` hook by default.
             time_sets: See :meth:`store_model_results`.
             datetime_index: See :meth:`store_model_results`.
+            spec: See :meth:`store_model_results`.
+            overrides: See :meth:`store_model_results`.
             **options: Passed to the solve hook.
 
         Returns:
@@ -616,18 +985,24 @@ class Orchestrator:
         self._check_new(tag, RESULT_KIND, replace)
         hook = self.registry.resolve_ref(solve or self.hooks.solve, "solve")
         outcome = run_solve(hook, model, **options)
-        return self.store_model_results(
-            tag,
-            model,
-            outcome,
-            keys,
-            include,
-            exclude,
-            streams=streams,
-            replace=replace,
-            time_sets=time_sets,
-            datetime_index=datetime_index,
-        )
+        self._call.solve = solve  # recorded in the run's hooks (D10)
+        try:
+            return self.store_model_results(
+                tag,
+                model,
+                outcome,
+                keys,
+                include,
+                exclude,
+                streams=streams,
+                replace=replace,
+                time_sets=time_sets,
+                datetime_index=datetime_index,
+                spec=spec,
+                overrides=overrides,
+            )
+        finally:
+            self._call.solve = None
 
     def model_results(
         self, tag: str, units: Mapping[str, str] | None = None
@@ -699,6 +1074,7 @@ class Orchestrator:
         data: ModelData | None,
         outcome: SolveOutcome | None,
         streams: Iterable[str] | None,
+        link: "_SpecLink | None" = None,
     ) -> StoredResult:
         table, manifest, writes = None, None, []
         if data is not None and (outcome is None or outcome.ok):
@@ -714,8 +1090,16 @@ class Orchestrator:
                 )
         if outcome is not None:
             self.backend.declare(self._runs, SOLVE_OUTCOME, role="output", kind="json")
-        run_id = self.backend.start_run(self._runs, self._metadata(tag))
+        metadata = self._metadata(tag)
+        if link is not None:
+            for label in (MODEL_SPEC_REF, OVERRIDES):
+                self.backend.declare(self._runs, label, role="input", kind="json")
+            metadata.update(link.metadata())
+        run_id = self.backend.start_run(self._runs, metadata)
         try:
+            if link is not None:
+                self.backend.record(run_id, MODEL_SPEC_REF, link.ref())
+                self.backend.record(run_id, OVERRIDES, link.overrides)
             if manifest is not None:
                 self.backend.record(run_id, MODEL_MANIFEST, manifest)
             if table is not None:
@@ -755,7 +1139,7 @@ class Orchestrator:
         return f"{study}::{name}"
 
     def _define_ledgers(self, study: str) -> None:
-        for ledger in LEDGERS.values():
+        for ledger in _ledger_names():
             self.backend.define_study(self._ledger(study, ledger))
 
     def _check_new(self, tag: str, kind: str, replace: bool = False) -> None:
@@ -863,11 +1247,26 @@ class Orchestrator:
             )
         return found[0]
 
-    def _metadata(self, tag: str, kind: str = RESULT_KIND) -> dict[str, str]:
-        return {
+    def _metadata(self, tag: str, kind: str = RESULT_KIND) -> dict[str, Any]:
+        """Return a run's metadata: its tag, plus what reproduces it (D10)."""
+        metadata: dict[str, Any] = {
             **_tag_metadata(tag, kind),
             "flexorch_version": version("flex-orchestrator"),
+            "flexpse_version": _version_of("flex-pse"),
+            "acquirium_version": _version_of("acquirium"),
+            "flexorch_user": _user(),
         }
+        if kind == RESULT_KIND:
+            solve = getattr(self._call, "solve", None)
+            hooks = self.hooks.merged(HookSet(solve=solve)) if solve else self.hooks
+            metadata["flexorch_hooks"] = {
+                f.name: _hook_name(getattr(hooks, f.name))
+                for f in fields(hooks)
+                if getattr(hooks, f.name) is not None
+            } or None
+        if self.connection is not None:
+            metadata["flexorch_connection"] = self.connection.metadata()
+        return {k: v for k, v in metadata.items() if v is not None}
 
     def _time_sets(self, model: Any) -> list[Any] | None:
         ref = self.hooks.time_sets
@@ -885,11 +1284,68 @@ class Orchestrator:
         return hook(model) or None
 
 
+@dataclass(frozen=True)
+class _Written:
+    run_id: str
+
+
+@dataclass(frozen=True)
+class _SpecLink:
+    """The model spec (and overrides) a result was built from (D10)."""
+
+    tag: str
+    spec_hash: str
+    overrides: dict[str, Any]
+
+    def ref(self) -> dict[str, str]:
+        return {"tag": self.tag, "spec_hash": self.spec_hash}
+
+    def metadata(self) -> dict[str, str]:
+        return {
+            "spec_tag": self.tag,
+            "spec_hash": self.spec_hash,
+            "run_hash": run_hash(self.spec_hash, self.overrides),
+        }
+
+
+def _ledger_names() -> list[str]:
+    return list(dict.fromkeys(LEDGERS.values()))
+
+
+def _spec_kind(kind: str) -> SpecKind:
+    if kind not in (MODEL_SPEC, SURROGATE_SPEC):
+        raise ValueError(
+            f"kind must be {MODEL_SPEC!r} or {SURROGATE_SPEC!r}, not {kind!r}."
+        )
+    return kind  # type: ignore[return-value]
+
+
 def _check_outcome(outcome: Any) -> None:
     if outcome is not None and not isinstance(outcome, SolveOutcome):
         raise TypeError(
             f"outcome must be a SolveOutcome, not {type(outcome).__name__}."
         )
+
+
+def _version_of(dist: str) -> str | None:
+    try:
+        return version(dist)
+    except PackageNotFoundError:
+        return None
+
+
+def _user() -> str | None:
+    """The user, from the environment (Phase 1; the token in Phase 2, D15)."""
+    try:
+        return os.environ.get("FLEXORCH_USER") or getpass.getuser()
+    except (KeyError, OSError):
+        return None
+
+
+def _hook_name(ref: Any) -> str:
+    if isinstance(ref, str):
+        return ref
+    return hook_ref(ref) or f"<{getattr(ref, '__qualname__', type(ref).__name__)}>"
 
 
 def _ledger_of(kind: str) -> str:

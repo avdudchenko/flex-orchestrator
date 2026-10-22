@@ -142,15 +142,19 @@ def memory_backend():
 
 
 @pytest.fixture(scope="session")
-def acquirium_local(tmp_path_factory):
+def acquirium_dir(tmp_path_factory):
+    """The session Acquirium's data directory."""
+    return tmp_path_factory.mktemp("acquirium")
+
+
+@pytest.fixture(scope="session")
+def acquirium_local(acquirium_dir):
     """A local Acquirium (DuckDB) for the whole session; tests use fresh studies.
 
     Starting the server takes about half a minute, so it is started once.
     """
     aq = pytest.importorskip("acquirium")
-    client = aq.init(
-        data_dir=tmp_path_factory.mktemp("acquirium"), exact_only=True, timeout=300
-    )
+    client = aq.init(data_dir=acquirium_dir, exact_only=True, timeout=300)
     yield client
     aq.shutdown()
 

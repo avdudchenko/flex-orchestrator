@@ -95,10 +95,10 @@ def race(orch, monkeypatch, value):
     """Make another writer store `base` between our tag check and our write."""
     original = orch._store
 
-    def store_with_a_rival(tag, data, outcome, streams):
+    def store_with_a_rival(tag, data, outcome, streams, *link):
         monkeypatch.setattr(orch, "_store", original)
         original(tag, model(value), None, None)  # the rival's run starts first
-        return original(tag, data, outcome, streams)
+        return original(tag, data, outcome, streams, *link)
 
     monkeypatch.setattr(orch, "_store", store_with_a_rival)
 
@@ -123,8 +123,8 @@ def test_a_replacement_that_lost_the_race_is_removed(orch, monkeypatch):
     orch.store_model_data("base", model(1.0))
     original = orch._store
 
-    def store_then_a_rival(tag, data, outcome, streams):
-        stored = original(tag, data, outcome, streams)
+    def store_then_a_rival(tag, data, outcome, streams, *link):
+        stored = original(tag, data, outcome, streams, *link)
         original(tag, model(9.0), None, None)  # a later replacement
         return stored
 

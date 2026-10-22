@@ -13,7 +13,9 @@ Acquirium and the same contract tests run against both:
 - finished runs, and whole studies, can be **deleted** (never a running one);
 - a **table** variable records a whole polars DataFrame (Acquirium stores it
   as Parquet), and a timeseries sample always has a value: a missing value is
-  no sample.
+  no sample;
+- a **file** variable records a :class:`FileValue`, bytes with a file name
+  (an Acquirium artifact, stored once per content hash).
 
 Timestamps are timezone-aware UTC datetimes on the way out; naive datetimes
 going in are taken as UTC.
@@ -27,7 +29,7 @@ from typing import Any, Literal, Protocol
 from flex_orchestrator.errors import StorageError
 
 Role = Literal["input", "output"]
-VariableKind = Literal["timeseries", "scalar", "json", "table"]
+VariableKind = Literal["timeseries", "scalar", "json", "table", "file"]
 RunStatus = Literal["running", "succeeded", "failed"]
 Row = tuple[datetime, float]
 """One timeseries sample: ``(timestamp, value)``."""
@@ -40,7 +42,8 @@ class Variable:
     Attributes:
         label: The variable's label, unique within its study.
         role: ``"input"`` or ``"output"``.
-        kind: ``"timeseries"``, ``"scalar"`` or ``"json"``.
+        kind: ``"timeseries"``, ``"scalar"``, ``"json"``, ``"table"`` or
+            ``"file"``.
         unit: The QUDT unit key, or ``None``.
         metadata: Everything else declared with it.
     """
@@ -50,6 +53,19 @@ class Variable:
     kind: VariableKind
     unit: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FileValue:
+    """The value of a ``file`` variable.
+
+    Attributes:
+        name: The file name (no directory).
+        data: The file's bytes.
+    """
+
+    name: str
+    data: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -78,8 +94,8 @@ class Record:
     Attributes:
         label: The variable's label.
         kind: The variable's kind.
-        value: The value of a scalar or JSON variable, or the polars DataFrame
-            of a table.
+        value: The value of a scalar or JSON variable, the polars DataFrame
+            of a table, or the :class:`FileValue` of a file.
         rows: The samples of a timeseries, in time order.
     """
 
@@ -105,6 +121,9 @@ class StorageBackend(Protocol):
 
     def has_study(self, name: str) -> bool:
         """Return whether the study exists."""
+
+    def studies(self) -> list[str]:
+        """Return the names of every study, sorted."""
 
     def variable(self, study: str, label: str) -> Variable | None:
         """Return the declaration of ``label``, or ``None``."""
@@ -134,7 +153,8 @@ class StorageBackend(Protocol):
 
         ``value`` is a list of :data:`Row` for a timeseries (every row with a
         number), a number or ``None`` for a scalar, any JSON value for a JSON
-        variable, and a polars DataFrame for a table.
+        variable, a polars DataFrame for a table, and a :class:`FileValue` for
+        a file.
 
         Raises:
             StorageError: If the run isn't running, ``label`` isn't declared, or

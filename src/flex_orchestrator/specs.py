@@ -12,7 +12,8 @@ module is format-agnostic and imports neither pyomo nor flex-pse.
 - :func:`detect_format` names the spec's format; :func:`validate_spec` checks
   it with the format's validator when that format's library is installed.
 - :class:`SpecRecord` is what a store call writes: the spec with its kind,
-  tag, format, hash and parent.
+  tag, format, hash, parent and the files it references
+  (:mod:`flex_orchestrator.assets`).
 """
 
 import hashlib
@@ -23,8 +24,9 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from flex_orchestrator.assets import AssetRef
 from flex_orchestrator.errors import SpecError
 from flex_orchestrator.hooks import import_hook
 
@@ -164,6 +166,49 @@ def run_hash(model_spec_hash: str, overrides: Mapping[str, Any] | None = None) -
     return spec_hash({"spec_hash": model_spec_hash, "overrides": dict(overrides or {})})
 
 
+def record_hash(spec: Any, assets: Mapping[str, AssetRef] | None = None) -> str:
+    """Return the hash of a stored spec and the files it references.
+
+    Without assets it is :func:`spec_hash` of the spec, unchanged. With assets
+    it also covers each file's sha256, so editing a referenced file (a tariff,
+    say) changes the hash even though the spec text doesn't (D2).
+
+    Example:
+        >>> record_hash({"a": 1}) == spec_hash({"a": 1})
+        True
+    """
+    if not assets:
+        return spec_hash(spec)
+    return spec_hash(
+        {
+            "spec": to_json_spec(spec),
+            "assets": {pointer: ref.sha256 for pointer, ref in assets.items()},
+        }
+    )
+
+
+def normalise_spec(
+    kind: SpecKind, spec: Any, spec_format: str | None = None, validate: bool = True
+) -> tuple[dict[str, Any], str]:
+    """Return a spec as stored JSON and its format, validated when possible.
+
+    Raises:
+        SpecError: If the spec isn't JSON, its format belongs to the other
+            kind, or validation fails.
+    """
+    data = to_json_spec(spec)
+    spec_format = spec_format or detect_format(data)
+    expected = _FAMILY_KIND.get(spec_format.partition("/")[0])
+    if expected is not None and expected != kind:
+        raise SpecError(
+            f"This is a {spec_format} spec, which is stored as a {expected}, "
+            f"not a {kind}."
+        )
+    if validate:
+        data = validate_spec(data, spec_format) or data
+    return data, spec_format
+
+
 def detect_format(spec: Mapping[str, Any]) -> str:
     """Name the format of a JSON spec from its shape.
 
@@ -254,9 +299,12 @@ class SpecRecord(BaseModel):
         tag: The tag, unique per kind within a study.
         spec: The spec, as plain JSON.
         spec_format: See :func:`detect_format`.
-        spec_hash: See :func:`spec_hash`.
+        spec_hash: See :func:`record_hash`: the spec's hash, covering its
+            assets' hashes when it has any.
         parent_tag: The tag of the spec this one was derived from, e.g. the base
             model a surrogate was applied to.
+        assets: ``{JSON pointer: AssetRef}`` for each file the spec references;
+            the spec holds each asset's stored name at its pointer.
 
     Example:
         >>> record = SpecRecord.create("model_spec", "base", {"a": 1})
@@ -272,6 +320,7 @@ class SpecRecord(BaseModel):
     spec_format: str
     spec_hash: str
     parent_tag: str | None = None
+    assets: dict[str, AssetRef] = Field(default_factory=dict)
 
     @classmethod
     def create(
@@ -283,6 +332,7 @@ class SpecRecord(BaseModel):
         parent_tag: str | None = None,
         spec_format: str | None = None,
         validate: bool = True,
+        assets: Mapping[str, AssetRef] | None = None,
     ) -> "SpecRecord":
         """Normalise, check and hash a spec for storing.
 
@@ -295,6 +345,8 @@ class SpecRecord(BaseModel):
             validate: Run the format's validator (see :func:`validate_spec`),
                 which also normalises the spec: a flex-pse spec is stored with
                 its defaults written out.
+            assets: The files the spec references, already collected (see
+                :func:`flex_orchestrator.assets.collect_assets`).
 
         Returns:
             The record.
@@ -306,23 +358,19 @@ class SpecRecord(BaseModel):
         check_tag(tag)
         if parent_tag is not None:
             check_tag(parent_tag)
-        data = to_json_spec(spec)
-        spec_format = spec_format or detect_format(data)
-        expected = _FAMILY_KIND.get(spec_format.partition("/")[0])
-        if expected is not None and expected != kind:
-            raise SpecError(
-                f"{tag!r} is a {spec_format} spec, which is stored as a "
-                f"{expected}, not a {kind}."
-            )
-        if validate:
-            data = validate_spec(data, spec_format) or data
+        try:
+            data, spec_format = normalise_spec(kind, spec, spec_format, validate)
+        except SpecError as exc:
+            raise SpecError(f"Spec {tag!r}: {exc}") from exc
+        assets = dict(assets or {})
         return cls(
             kind=kind,
             tag=tag,
             spec=data,
             spec_format=spec_format,
-            spec_hash=spec_hash(data),
+            spec_hash=record_hash(data, assets),
             parent_tag=parent_tag,
+            assets=assets,
         )
 
     def metadata(self) -> dict[str, str]:
@@ -351,7 +399,7 @@ class SpecRecord(BaseModel):
         Raises:
             SpecError: If the hash doesn't match.
         """
-        actual = spec_hash(self.spec)
+        actual = record_hash(self.spec, self.assets)
         if actual != self.spec_hash:
             raise SpecError(
                 f"Spec {self.tag!r} doesn't match its hash: stored "

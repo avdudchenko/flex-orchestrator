@@ -17,6 +17,7 @@ import polars as pl
 import requests
 
 from flex_orchestrator.backend.base import (
+    FileValue,
     Record,
     Role,
     Run,
@@ -72,6 +73,11 @@ class AcquiriumBackend:
             raise StorageError(f"Acquirium: {exc}") from exc
         return True
 
+    def studies(self) -> list[str]:
+        """Return the names of every study, sorted."""
+        items = _call(self.acquirium.client.list_experiment_studies)
+        return sorted(item["name"] for item in items)
+
     def variable(self, study: str, label: str) -> Variable | None:
         """Return the declaration of ``label``, or ``None``."""
         found = self._study(study).variables.get(label)
@@ -95,7 +101,7 @@ class AcquiriumBackend:
         """
         builder = getattr(self._study(study), role)(label)
         metadata = dict(metadata or {})
-        if kind in ("json", "table"):
+        if kind in ("json", "table", "file"):
             if unit is not None:
                 raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
             declared = _call(getattr(builder, kind), **metadata)
@@ -123,6 +129,18 @@ class AcquiriumBackend:
             raise StorageError(f"Variable {label!r} isn't declared.")
         if variable.kind == "table" and not isinstance(value, pl.DataFrame):
             raise StorageError(f"Table {label!r} records a polars DataFrame.")
+        if variable.kind == "file":
+            if not isinstance(value, FileValue):
+                raise StorageError(f"File {label!r} records a FileValue.")
+            # Bytes go straight to the server; no local file is involved.
+            _call(
+                run.study.client.attach_experiment_bytes,
+                run_id,
+                variable.variable_id,
+                value.data,
+                filename=value.name,
+            )
+            return
         _call(variable.record, value)
 
     def finish_run(self, run_id: str) -> None:
@@ -202,6 +220,13 @@ class AcquiriumBackend:
             elif variable.kind == "table":
                 frame = _call(observation.dataframe)
                 found.append(Record(variable.label, "table", frame))
+            elif variable.kind == "file":
+                data = _call(observation.read_bytes)
+                found.append(
+                    Record(
+                        variable.label, "file", FileValue(observation.filename, data)
+                    )
+                )
             else:
                 found.append(Record(variable.label, variable.kind, observation.value))
         return found

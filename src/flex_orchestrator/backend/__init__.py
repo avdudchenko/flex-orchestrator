@@ -1,6 +1,7 @@
 """Storage backends (PLAN.md D10): the contract, in-memory, and Acquirium."""
 
 from flex_orchestrator.backend.base import (
+    FileValue,
     Record,
     Row,
     Run,
@@ -23,6 +24,7 @@ def __getattr__(name):
 
 __all__ = [
     "AcquiriumBackend",
+    "FileValue",
     "MemoryBackend",
     "Record",
     "Row",

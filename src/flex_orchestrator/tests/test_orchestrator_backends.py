@@ -5,12 +5,14 @@ Each test runs on the memory backend (unit tier) and a local Acquirium
 """
 
 from datetime import UTC
+from importlib.metadata import version
 
 import pytest
 
 from flex_orchestrator.errors import TagExistsError
-from flex_orchestrator.export import export_model_data
-from flex_orchestrator.hooks import SolveOutcome
+from flex_orchestrator.export import ModelData, export_model_data
+from flex_orchestrator.hooks import DEFAULT_HOOKS, SolveOutcome
+from flex_orchestrator.orchestrator import Orchestrator
 
 SELECTION = ["costing.aggregate*", "costing.annualized_cost", "demo.pump.*"]
 OK = SolveOutcome(status="ok", termination="optimal")
@@ -161,3 +163,45 @@ def test_orch_acquirium_is_the_raw_client(acquirium_local, study_name, demo_mode
         metadata={"flexorch_kind": "result", "flexorch_tag": "base"}
     )
     assert [r.status for r in runs.all()] == ["succeeded"]
+
+
+def test_run_metadata_records_what_reproduces_a_result(orch, monkeypatch):
+    """D10: versions, the user and the hooks are in every result's metadata."""
+    monkeypatch.setenv("FLEXORCH_USER", "alice")
+    orch.store_model_data("base", ModelData([]), OK)
+    meta = orch.result("base").metadata
+    assert meta["flexorch_user"] == "alice"
+    assert meta["flexorch_version"] == version("flex-orchestrator")
+    assert meta["flexpse_version"] == version("flex-pse")
+    assert meta["flexorch_hooks"]["solve"] == DEFAULT_HOOKS.solve
+    assert "flexorch_connection" not in meta  # the backend was passed in
+
+
+@pytest.mark.component
+def test_attach_to_the_local_acquirium(acquirium_local, acquirium_dir, study_name):
+    """D11 mode 1 on the session's data_dir attaches to its running server."""
+    orch = Orchestrator(data_dir=acquirium_dir)  # not closed: the server is shared
+    assert orch.connection.acquirium is acquirium_local
+    orch.create_study(study_name)
+    orch.store_model_data("base", ModelData([]), OK)
+    meta = orch.result("base").metadata
+    assert meta["flexorch_connection"] == {
+        "mode": "local",
+        "target": str(acquirium_dir.resolve()),
+    }
+    assert meta["acquirium_version"] == version("acquirium")
+
+
+def test_studies_lists_orchestrator_studies(orch, study_name):
+    orch.create_study(f"{study_name}-b")
+    found = orch.studies()
+    assert {study_name, f"{study_name}-b"} <= set(found)
+    assert not any("::" in name for name in found)
+
+
+def test_register_hooks(orch):
+    from flex_orchestrator.testing import fake_build
+
+    hooks = orch.register_hooks("mine", build=fake_build)
+    assert orch.registry.resolve_ref("mine", "build") is fake_build
+    assert hooks.build is fake_build
