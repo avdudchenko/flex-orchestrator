@@ -4,12 +4,13 @@ These run at the unit tier: a tiny Pyomo build hook and the fake solve need no
 solver. ``test_study_flexpse.py`` runs the fit-then-sweep exit with flex-pse.
 """
 
+import dataclasses
 import json
 
 import pyomo.environ as pyo
 import pytest
 
-from flex_orchestrator.errors import StudyConfigError, TagExistsError
+from flex_orchestrator.errors import HookError, StudyConfigError, TagExistsError
 from flex_orchestrator.hooks import HookSet
 from flex_orchestrator.orchestrator import Orchestrator
 from flex_orchestrator.study import StudyConfig, expand, load_config, run_task
@@ -95,6 +96,12 @@ def test_load_config_from_a_mapping_a_model_or_a_file(tmp_path):
 def test_invalid_configs(config_, message):
     with pytest.raises(StudyConfigError, match=message):
         load_config(config_)
+
+
+def test_ray_tasks_time_out_after_two_hours_unless_set():
+    assert load_config(config()).execution.task_timeout_s == 7200
+    no_limit = load_config(config(execution={"task_timeout_s": None}))
+    assert no_limit.execution.task_timeout_s is None
 
 
 def test_unreadable_config_files(tmp_path):
@@ -276,11 +283,15 @@ def test_config_hooks_and_study(orch):
     assert run.tasks[0].hooks == {"solve": "flex_orchestrator.testing:fake_solve"}
 
 
-def test_parallel_execution_waits_for_ray(orch):
-    with pytest.raises(StudyConfigError, match="arrives with M5"):
-        orch.execute_study(config(), max_workers=2)
-    with pytest.raises(StudyConfigError, match="arrives with M5"):
-        orch.execute_study(config(execution={"max_workers": 4}))
+def test_ray_needs_hooks_it_can_import(orch):
+    # Checked before anything runs (or Ray starts): workers import hooks by name.
+    with pytest.raises(HookError, match="can't run on a Ray worker"):
+        orch.execute_study(config(), max_workers=2, build=lambda spec, **o: None)
+    orch.register_hooks("anonymous", build=lambda spec, **o: None)
+    cfg = config(execution={"max_workers": 4}, hooks={"build": "anonymous"})
+    with pytest.raises(HookError, match="'anonymous' can't run on a Ray worker"):
+        orch.execute_study(cfg, dry_run=True)
+    assert results(orch) == {}
 
 
 def test_a_stored_derived_spec_is_reused_or_refused(orch):
@@ -535,3 +546,79 @@ def test_formats_that_fail(output_name, message):
     cfg = {"base_model_spec": "base", "sweeps": [sweep], "output_name": output_name}
     with pytest.raises(StudyConfigError, match=message):
         expand(load_config(cfg))
+
+
+def test_the_ray_address_comes_from_the_call_the_config_or_the_environment():
+    from flex_orchestrator.backend import MemoryBackend
+
+    seen = []
+    orch = Orchestrator(
+        MemoryBackend(), hooks=HOOKS, environ={"FLEXORCH_RAY_ADDRESS": "ray://env:1"}
+    )
+    assert orch.ray_address == "ray://env:1"
+    assert Orchestrator(MemoryBackend(), environ={}).ray_address is None
+    orch.create_study("s")
+    orch.store_model_spec("base", {"value": 1.0})
+
+    def fake_run_tasks(orch, tasks, hooks, execution, workers, progress):
+        seen.append(execution.ray_address)
+        return []
+
+    import flex_orchestrator.parallel as parallel
+
+    real, parallel.run_tasks = parallel.run_tasks, fake_run_tasks
+    try:
+        cfg = {
+            "base_model_spec": "base",
+            "hooks": {"build": "flex_orchestrator.testing:fake_build"},
+        }
+        orch.execute_study(cfg, max_workers=2)
+        orch.execute_study(
+            {**cfg, "execution": {"ray_address": "ray://cfg:1"}}, max_workers=2
+        )
+        orch.execute_study(cfg, max_workers=2, ray_address="ray://call:1")
+    finally:
+        parallel.run_tasks = real
+    assert seen == ["ray://env:1", "ray://cfg:1", "ray://call:1"]
+
+
+def test_a_task_that_cant_be_prepared_is_an_error(orch):
+    run = orch.execute_study(
+        {
+            "base_model_spec": "base",
+            "sweeps": [{"type": "surrogate", "unit": "u", "surrogates": ["nope"]}],
+            "execution": {"retries": 1},
+        }
+    )
+    [result] = run.results
+    assert result.status == "error" and result.attempts == 2
+    assert "nope" in result.error
+
+
+def test_time_sets_hooks_in_a_worker(orch, monkeypatch):
+    from flex_orchestrator.study import task as steps
+
+    work = steps.prepare(orch, expand(load_config(config()))[0], HOOKS)
+    broken = dataclasses.replace(
+        work,
+        hooks=HookSet(build=tiny_build, solve=fake_solve, time_sets="nope.module:fn"),
+    )
+    assert "nope.module" in steps.execute(broken).error
+    monkeypatch.setattr(steps, "DEFAULT_HOOKS", HookSet(time_sets="nope.module:fn"))
+    done = steps.execute(broken)  # flex-pse's hook missing: time is duck-typed
+    assert done.error is None and done.outcome.ok
+
+
+def test_connecting_to_a_named_ray(monkeypatch):
+    import sys
+    import types
+
+    from flex_orchestrator import parallel
+
+    calls = []
+    fake = types.SimpleNamespace(
+        is_initialized=lambda: False, init=lambda **kw: calls.append(kw)
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake)
+    assert parallel.connect("ray://head:10001") is fake
+    assert calls == [{"address": "ray://head:10001", "namespace": "flexorch"}]

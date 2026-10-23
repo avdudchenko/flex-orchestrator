@@ -311,7 +311,11 @@ class Orchestrator:
             ``FLEXORCH_PLUGINS`` load too. Use
             :func:`~flex_orchestrator.ext.create_orchestrator` to get a
             plugin's orchestrator subclass.
-        environ: Where ``FLEXORCH_PLUGINS`` is read; ``os.environ`` by default.
+        environ: Where ``FLEXORCH_PLUGINS`` and ``FLEXORCH_RAY_ADDRESS`` are
+            read; ``os.environ`` by default.
+        ray_address: The Ray cluster for studies with ``max_workers > 1``
+            when their config names none (D13); ``FLEXORCH_RAY_ADDRESS`` if
+            unset, else local Ray.
 
     Example:
         >>> from flex_orchestrator.backend import MemoryBackend
@@ -337,6 +341,7 @@ class Orchestrator:
         allow_delete: bool = True,
         plugins: Sequence[Plugin | str] | None = None,
         environ: Mapping[str, str] | None = None,
+        ray_address: str | None = None,
     ) -> None:
         """Set up the orchestrator; see the class docstring for the arguments."""
         self.connection: Connection | None = None
@@ -365,6 +370,8 @@ class Orchestrator:
             )
         self.frame = frame
         self.allow_delete = allow_delete
+        env = os.environ if environ is None else environ
+        self.ray_address = ray_address or env.get("FLEXORCH_RAY_ADDRESS") or None
         self._study: str | None = None
         self._locks: dict[str, threading.RLock] = {}
         self._locks_lock = threading.Lock()
@@ -522,6 +529,9 @@ class Orchestrator:
             for ledger in present:
                 self.backend.delete_study(ledger)
             self.backend.delete_study(name)
+        cache = getattr(self._call, "specs", None)
+        for key in [k for k in cache or {} if k[0] == name]:
+            del cache[key]
         if self._study == name:
             self._study = None
 
@@ -550,6 +560,9 @@ class Orchestrator:
                     f"Study {self.study!r} has no stored {kind} {tag!r}."
                 )
             self.backend.delete_runs(ledger, [run.run_id for run in found])
+        cache = getattr(self._call, "specs", None)
+        if cache is not None:
+            cache.pop((self.study, kind, tag), None)
         return len(found)
 
     # Specs (D2)
@@ -760,12 +773,38 @@ class Orchestrator:
             return _Written(run_id)
 
         self._guarded(kind, tag, replace, write)
+        cache = getattr(self._call, "specs", None)
+        if cache is not None:
+            cache[(self.study, kind, tag)] = (record, files)
         return record
 
     def _read_spec(self, kind: str, tag: str) -> tuple[SpecRecord, dict[str, bytes]]:
+        cache = getattr(self._call, "specs", None)
+        key = (self.study, kind, tag)
+        if cache is not None and key in cache:
+            return cache[key]
         run = self._latest(tag, kind)
         ledger = self._ledger(self.study, LEDGERS[kind])
-        return spec_store.read(self.backend, ledger, run.run_id)
+        found = spec_store.read(self.backend, ledger, run.run_id)
+        if cache is not None:
+            cache[key] = found
+        return found
+
+    @contextmanager
+    def _caching_specs(self) -> Iterator[None]:
+        """Read each spec once in this block (a study run reads the same ones).
+
+        A spec stored or replaced in the block is cached as written, and a
+        deleted one is dropped, so the cache stays what the store holds as long
+        as this orchestrator is the only writer, which a study run assumes.
+        """
+        previous = getattr(self._call, "specs", None)
+        if previous is None:
+            self._call.specs = {}
+        try:
+            yield
+        finally:
+            self._call.specs = previous
 
     def _spec_link(
         self, model: Any, spec: str | None, overrides: Mapping[str, Any] | None
@@ -1083,8 +1122,7 @@ class Orchestrator:
         self._check_new(tag, RESULT_KIND, replace)
         hook = self.registry.resolve_ref(solve or self.hooks.solve, "solve")
         outcome = run_solve(hook, model, **options)
-        self._call.solve = solve  # recorded in the run's hooks (D10)
-        try:
+        with self._using_hooks(HookSet(solve=solve)):  # recorded with the run (D10)
             return self.store_model_results(
                 tag,
                 model,
@@ -1099,8 +1137,6 @@ class Orchestrator:
                 spec=spec,
                 overrides=overrides,
             )
-        finally:
-            self._call.solve = None
 
     def model_results(
         self, tag: str, units: Mapping[str, str] | None = None
@@ -1241,6 +1277,7 @@ class Orchestrator:
         build: Any = None,
         solve: Any = None,
         max_workers: int | None = None,
+        ray_address: str | None = None,
         dry_run: bool = False,
         progress: Progress | None = None,
     ) -> Any:
@@ -1254,7 +1291,9 @@ class Orchestrator:
             build: A build hook (callable, import string or registered name)
                 that wins over the config's.
             solve: A solve hook that wins over the config's.
-            max_workers: Overrides ``execution.max_workers``.
+            max_workers: Overrides ``execution.max_workers``; more than 1
+                runs the tasks (and the fits' variants) on Ray (D13).
+            ray_address: Overrides ``execution.ray_address``.
             dry_run: Expand the config and return the planned fits and tasks
                 without storing or solving anything.
             progress: Receives a report after each fit and task.
@@ -1272,6 +1311,8 @@ class Orchestrator:
         params = {"config": load_config(config), "dry_run": dry_run}
         if max_workers is not None:
             params["max_workers"] = max_workers
+        if ray_address is not None:
+            params["ray_address"] = ray_address
         return self.run_command(
             "execute_study",
             params,
@@ -1566,6 +1607,16 @@ class Orchestrator:
         finally:
             setattr(self._call, slot, previous)
 
+    @contextmanager
+    def _using_hooks(self, hooks: HookSet) -> Iterator[None]:
+        """Record ``hooks`` (over the orchestrator's) with results stored here."""
+        previous = getattr(self._call, "hooks", None)
+        self._call.hooks = (previous or HookSet()).merged(hooks)
+        try:
+            yield
+        finally:
+            self._call.hooks = previous
+
     def _check_delete(self, what: str) -> None:
         if not self.allow_delete:
             raise StorageError(
@@ -1626,8 +1677,7 @@ class Orchestrator:
             "flexorch_user": _user(),
         }
         if kind == RESULT_KIND:
-            solve = getattr(self._call, "solve", None)
-            hooks = self.hooks.merged(HookSet(solve=solve)) if solve else self.hooks
+            hooks = self.hooks.merged(getattr(self._call, "hooks", None) or HookSet())
             metadata["flexorch_hooks"] = {
                 f.name: _hook_name(getattr(hooks, f.name))
                 for f in fields(hooks)

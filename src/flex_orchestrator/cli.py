@@ -2,7 +2,8 @@
 
 ::
 
-    flex-orch [CONNECTION] run study.yaml [--study S] [--workers N] [--dry-run]
+    flex-orch [CONNECTION] run study.yaml [--study S] [--workers N]
+                                          [--ray-address A] [--dry-run]
     flex-orch [CONNECTION] cmd NAME [--study S] [--OPTION VALUE ...]
     flex-orch [CONNECTION] commands
     flex-orch [CONNECTION] export STUDY PATH [--parts ...] [--compress] [--overwrite]
@@ -38,8 +39,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args, rest = parser.parse_known_args(argv)
     if args.action != "cmd" and rest:
         parser.error(f"unrecognized arguments: {' '.join(rest)}")
-    if args.action == "run" and args.ray_address:
-        parser.error("--ray-address runs tasks on Ray, which arrives with M5.")
     try:
         with _orchestrator(args) as orch:
             result = _run(orch, args, rest)
@@ -75,8 +74,11 @@ def _parser() -> argparse.ArgumentParser:
     run = actions.add_parser("run", help="run a study config")
     run.add_argument("config", help="the study config, YAML or JSON")
     run.add_argument("--study", help="the study (if the config doesn't name one)")
-    run.add_argument("--workers", type=int, help="tasks at once (>1 needs Ray, M5)")
-    run.add_argument("--ray-address", help="a Ray cluster (M5)")
+    run.add_argument("--workers", type=int, help="tasks at once (>1 runs on Ray)")
+    run.add_argument(
+        "--ray-address",
+        help="a Ray cluster, e.g. ray://head:10001 (local Ray if unset)",
+    )
     run.add_argument(
         "--dry-run", action="store_true", help="print the plan, run nothing"
     )
@@ -128,7 +130,10 @@ def _run(orch: Any, args: argparse.Namespace, rest: list[str]) -> Any:
                     "Name the study: in the config (study:) or with --study."
                 )
         return orch.execute_study(
-            config, max_workers=args.workers, dry_run=args.dry_run
+            config,
+            max_workers=args.workers,
+            ray_address=args.ray_address,
+            dry_run=args.dry_run,
         )
     if args.action == "commands":
         return [

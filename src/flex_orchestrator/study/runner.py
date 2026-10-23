@@ -7,9 +7,11 @@
 2. With ``on_existing: error``, every task's tag is checked; a stored one
    raises before anything runs.
 3. ``fits`` run (``fit_surrogate``), so the sweeps can use their surrogates.
-4. Each task runs in turn (:func:`~flex_orchestrator.study.task.run_task`),
-   in this process. ``max_workers > 1`` runs them on Ray, which arrives with
-   M5.
+4. The tasks run: one after another in this process
+   (:func:`~flex_orchestrator.study.task.run_task`), or with
+   ``max_workers > 1`` on Ray (:func:`flex_orchestrator.parallel.run_tasks`),
+   where workers build and solve and this process stores. Either way the
+   stored results are the same.
 
 The command returns a :class:`StudyRun`; the call, its parameters and its
 summary are recorded in ``flexorch::commands`` like every command's.
@@ -37,7 +39,13 @@ from flex_orchestrator.study.config import (
     SurrogateSweep,
     VariableSweep,
 )
-from flex_orchestrator.study.task import SurrogateChoice, TaskResult, TaskSpec, run_task
+from flex_orchestrator.study.task import (
+    SurrogateChoice,
+    TaskResult,
+    TaskSpec,
+    run_task,
+    study_hooks,
+)
 
 _FIELD = re.compile(r"\{([^{}]+)\}")
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.\-]+")
@@ -50,11 +58,13 @@ class ExecuteParams(BaseModel):
         config: The study config.
         dry_run: Return the plan without storing or solving anything.
         max_workers: Overrides ``config.execution.max_workers``.
+        ray_address: Overrides ``config.execution.ray_address``.
     """
 
     config: StudyConfig
     dry_run: bool = False
     max_workers: int | None = Field(default=None, ge=1)
+    ray_address: str | None = None
 
 
 class StudyRun(BaseModel):
@@ -100,13 +110,26 @@ def execute_study(
     solve: Any = None,
 ) -> StudyRun:
     """Run a study config: its fits, then every task of its sweeps."""
+    with orch._caching_specs():  # every task reads the same few specs
+        return _execute(orch, params, progress, build, solve)
+
+
+def _execute(
+    orch: Any, params: ExecuteParams, progress: Progress, build: Any, solve: Any
+) -> StudyRun:
     cfg = params.config
-    workers = params.max_workers or cfg.execution.max_workers
-    if workers > 1:
-        raise StudyConfigError(
-            f"max_workers={workers} runs tasks in parallel on Ray, which arrives "
-            "with M5; use max_workers=1."
-        )
+    execution = cfg.execution
+    address = params.ray_address or execution.ray_address or orch.ray_address
+    if address != execution.ray_address:
+        execution = execution.model_copy(update={"ray_address": address})
+    workers = params.max_workers or execution.max_workers
+    # Resolved before anything runs, so a hook Ray can't import fails early.
+    hooks = study_hooks(
+        orch,
+        cfg.hooks.model_dump(exclude_none=True),
+        HookSet(build=build, solve=solve),
+        portable=workers > 1,
+    )
     if cfg.study is not None:
         orch.get_or_create_study(cfg.study)
     tasks = expand(cfg)
@@ -121,16 +144,19 @@ def execute_study(
     progress.update(done=0, total=len(cfg.fits) + len(tasks), message="fitting")
     for fit in cfg.fits:
         progress.check()
-        run.fits.append(run_fits(orch, fit, Progress()))
+        run.fits.append(run_fits(orch, fit, Progress(), execution, workers))
         progress.advance(message="fitted " + ", ".join(run.fits[-1].tags))
-    runtime = HookSet(build=build, solve=solve)
-    for task in tasks:
+    if workers > 1:
+        from flex_orchestrator.parallel import run_tasks
+
+        run.results = run_tasks(orch, tasks, hooks, execution, workers, progress)
+    for task in tasks if workers == 1 else ():
         progress.check()
-        result = run_task(orch, task, runtime, retries=cfg.execution.retries)
+        result = run_task(orch, task, retries=execution.retries, hooks=hooks)
         run.results.append(result)
         orch.on_task_result(result)
         progress.advance(message=f"{task.tag}: {result.status}")
-        if result.status in ("failed", "error") and cfg.execution.on_error == "stop":
+        if result.status in ("failed", "error") and execution.on_error == "stop":
             break
     orch.events.emit("job_finished", job=run)
     return run

@@ -1,0 +1,90 @@
+# One tenant's own Ray cluster on Kubernetes, with KubeRay (PLAN.md D13, D14).
+# Apply it in the tenant's namespace, next to its default-deny NetworkPolicy:
+#
+#   sed "s/TENANT/tenant-a/g; s#IMAGE#registry/flexorch-tenant:0.1#" raycluster.yaml \
+#     | kubectl apply -n flexorch-tenant-a -f -
+#
+# The orchestrator connects with ray_address="ray://ray-TENANT-head-svc:10001".
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ray-TENANT
+  labels: {app.kubernetes.io/part-of: flexorch, flexorch/tenant: TENANT}
+spec:
+  rayVersion: "2.59.0"
+  headGroupSpec:
+    rayStartParams:
+      num-cpus: "0" # the head schedules; workers solve
+      include-dashboard: "false"
+    template:
+      metadata:
+        labels: {flexorch/tenant: TENANT, flexorch/role: ray}
+      spec:
+        automountServiceAccountToken: false
+        securityContext: {runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000}
+        containers:
+          - name: ray-head
+            image: IMAGE
+            resources:
+              requests: {cpu: "1", memory: 2Gi}
+              limits: {cpu: "2", memory: 4Gi}
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities: {drop: [ALL]}
+            env: &threads
+              - {name: OMP_NUM_THREADS, value: "1"}
+              - {name: MKL_NUM_THREADS, value: "1"}
+              - {name: OPENBLAS_NUM_THREADS, value: "1"}
+              - {name: RAY_USAGE_STATS_ENABLED, value: "0"}
+            volumeMounts: &scratch
+              - {name: tmp, mountPath: /tmp}
+              - {name: shm, mountPath: /dev/shm}
+        volumes: &volumes
+          - {name: tmp, emptyDir: {}}
+          - {name: shm, emptyDir: {medium: Memory, sizeLimit: 2Gi}}
+  workerGroupSpecs:
+    - groupName: solvers
+      replicas: 2
+      minReplicas: 0
+      maxReplicas: 4
+      rayStartParams: {}
+      template:
+        metadata:
+          labels: {flexorch/tenant: TENANT, flexorch/role: ray}
+        spec:
+          automountServiceAccountToken: false
+          securityContext: {runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000}
+          containers:
+            - name: ray-worker
+              image: IMAGE
+              resources:
+                requests: {cpu: "8", memory: 16Gi}
+                limits: {cpu: "8", memory: 16Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              env: *threads
+              volumeMounts: *scratch
+          volumes: *volumes
+---
+# Ray pods talk only to each other and to the tenant's orchestrator.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ray-TENANT
+spec:
+  podSelector:
+    matchLabels: {flexorch/tenant: TENANT, flexorch/role: ray}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {flexorch/tenant: TENANT}}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {flexorch/tenant: TENANT, flexorch/role: ray}}
+    - to: # DNS
+        - namespaceSelector: {}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}]

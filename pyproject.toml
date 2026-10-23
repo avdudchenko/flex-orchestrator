@@ -23,6 +23,8 @@ flex-orch = "flex_orchestrator.cli:main"
 flexpse = ["flex-pse[parameterize,solvers]"]
 # The Acquirium backend; Acquirium (PR #78) is installed the same way as flex-pse.
 acquirium = ["acquirium", "requests"]
+# Parallel studies and fits (max_workers > 1, D13); Acquirium installs it too.
+ray = ["ray>=2.59"]
 dev = [
     "pytest",
     "pytest-cov",

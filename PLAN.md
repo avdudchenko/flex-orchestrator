@@ -936,7 +936,9 @@ GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas
   `on_existing` is `error`, `skip` or `replace`.
 - A `constant_intensity` surrogate is applied with the same `apply_surrogate` hook: flex-pse's surrogate element
   fixes the unit's `energy_intensity`.
-- **Not yet:** variants on Ray (`max_workers > 1` raises; M5).
+- **Variants on Ray (built, M5).** With `max_workers > 1` (or a study's `execution`), each prepared dataset is
+  `ray.put` once, the fits run as Ray tasks (`fitting.command._compute`, no store), and the main process stores
+  them in plan order, so the results equal fitting in-process.
 
 **D12 — Python 3.12**, distribution `flex-orchestrator`, import `flex_orchestrator`, src layout, hatchling, pydantic v2.
 
@@ -1015,6 +1017,31 @@ execution: {max_workers: 8, ray_address: null, task_timeout_s: 1800, retries: 1,
   - Larger tenants can get their own Ray cluster (KubeRay `RayCluster` per tenant) on the tenant network.
 - **Coexisting with Acquirium's Ray.** Acquirium runs in its own container in the tenant stack, so the two never
   share a Ray instance. In local mode, the separate namespace and explicit `ray.init` handle it. M5 checks this.
+
+**Built** (M5) in `flex_orchestrator.parallel` and `study.task`:
+- **Three steps per task.** `prepare` (main: check the tag, store the derived spec, read the spec and its files into
+  a `Work`), `execute` (anywhere: materialize, build, solve, export; returns a `Done` with the outcome, the
+  `ModelData`, the step times and the worker's memory) and `finish` (main: map units, store). `run_task` runs the
+  three in-process; `parallel.run_tasks` runs `execute` as `ray.remote` tasks. Both store the same results, which is
+  tested.
+- **What crosses to a worker:** the `TaskSpec`, the hooks as import strings (checked before anything runs; a
+  `__main__` function or lambda is refused), the export selection, the unit overrides, and the spec bundle (spec,
+  asset refs, file bytes) `ray.put` once per `spec_hash`. Workers export with a unit mapper that has no resolver,
+  and the main process maps every series' units again with its own (verified) mapper, so worker results need no
+  Acquirium.
+- **The loop.**
+  - At most `max_workers` tasks are in flight.
+  - A timeout is counted from submission, so it includes starting a worker: a few seconds the first time on
+    Windows. A task past `task_timeout_s` gets `ray.cancel(force=True)` and is stored as a failed result with
+    outcome `error` / `termination: timeout`. It isn't retried.
+  - Ray's own `max_retries` is 0. One budget, `retries`, covers a dead worker, a raising build and a raising solve.
+  - `on_error: stop` and a cancelled command cancel every running task. Results are returned in task order.
+- **Options.** `execution.ray_address` (else `execute_study(ray_address=)`, else `Orchestrator(ray_address=)` /
+  `FLEXORCH_RAY_ADDRESS`, else local Ray), `execution.resources` (`num_cpus`, `memory`) and `execution.max_calls`
+  (passed to `ray.remote`, which is the only place Ray accepts it). The thread variables are set through
+  `runtime_env`. A Ray the caller already initialized is used as it is.
+- **Metadata.** Result runs record the hooks the task used (`flexorch_hooks`), including the study's build hook.
+  `TaskResult.seconds` gives build, solve, export and store times.
 
 **D14 — Tenancy, isolation and backups (option A: one stack per tenant).**
 
@@ -1113,8 +1140,9 @@ src/flex_orchestrator/
     build.py  solve.py  surrogate.py  regression.py   # regression.py: get_regressor hook over flexparameterize.regression
   study/
     config.py            # StudyConfig schema (sweeps, hooks, output_name template, export selection), load_config
-    task.py              # TaskSpec/TaskResult + run_task (derive spec → build → solve → store; plain data, importable)
-    runner.py            # expand (sweeps → tasks) and the execute_study command (fits, then the in-process loop; Ray in M5)
+    task.py              # TaskSpec / TaskResult; prepare (main) → execute (anywhere, no store) → finish (main); run_task
+    runner.py            # expand (sweeps → tasks) and the execute_study command (fits, then the tasks: in-process or Ray)
+  parallel.py            # D13: connect to Ray, the ray.wait loop (timeouts, retries, cancellation), map_ordered for fits
   archive/               # D17 study export / import (named so it doesn't clash with export/, the model-data exporter)
     models.py            # pydantic models for flexorch-export/1 (study, spec, dataset, fit, result) → JSON Schema
     export.py            # export_study / export_result: streaming, temp-folder-then-rename, checksums
@@ -1416,6 +1444,23 @@ sweep; it reproduces `ro_surrogates` exactly and is the M4 "script 3"), `sweep_v
   - A hung task is killed at its timeout, and the sweep continues.
   - At least 5× faster than in-process with 8 workers.
   - The example runs against a 2-node per-tenant Ray cluster.
+- **Status: exit met on one machine; the 2-node run is waiting.** See D13 "Built" and
+  `docs/decisions/0001-ray-execution.md`.
+  - **Same results:** `study/tests/test_parallel.py` (1 vs 4 workers) and the benchmark (1 vs 8, every stored
+    value compared).
+  - **Hung task:** killed at its timeout, stored as a failed result, and the sweep goes on (`test_parallel.py`).
+    Retries, `on_error: stop`, cancellation, `max_calls` restarts, thread variables, 50-task uniqueness and
+    parallel fits are tested there too.
+  - **Speed:** 5.6× with 8 workers. The benchmark is the RO plant over a month at 15-minute steps, 3 surrogates ×
+    10 withdrawal limits, on Windows with local Ray: 423 s serial, 75 s with 8 workers.
+  - **Deviation:** the benchmark sweeps feed withdrawal limits, not prices, because the RO model is priced by a
+    tariff file.
+  - **Not yet:**
+    - The 2-node cluster and the Linux benchmark. Ray has no multi-node support on Windows and this machine has
+      no Docker; `deploy/ray/` (compose and KubeRay templates) is written but not run. They're picked up with
+      the M6 tenant stack.
+    - An actor pool reusing built models stays deferred (build is about 40% of a task, but sweeps that change
+      the model can't reuse one).
 
 #### M6 — Single-tenant deployment and backups (≈ 2 wks)
 - **Image** (`deploy/docker/`): micromamba plus `environment.yml` plus `idaes get-extensions`. Runs as non-root.

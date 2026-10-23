@@ -67,6 +67,7 @@ source_modules =
     flex_orchestrator.study
     flex_orchestrator.archive
     flex_orchestrator.cli
+    flex_orchestrator.parallel
 forbidden_modules =
     acquirium
     requests

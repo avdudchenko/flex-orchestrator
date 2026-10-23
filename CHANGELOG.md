@@ -7,6 +7,37 @@
   reference is stored as `{"$source": ...}`, not `{"source": ...}`.
 
 ### Added
+- Parallel execution on Ray (PLAN.md D13, M5). With `max_workers > 1`,
+  `execute_study` runs its tasks on Ray (`flex_orchestrator.parallel`):
+  - Workers build, solve and export; the main process stores each result as
+    it arrives (a `ray.wait` loop), so workers hold no credentials. Results
+    are the same as with `max_workers=1`.
+  - A task's spec and files go to Ray once per spec (`ray.put`).
+  - The loop enforces `task_timeout_s`, two hours by default (`null` for no
+    limit): `ray.cancel(force=True)`, and the task is stored as a failed
+    result, `termination: timeout`. It also retries a dead
+    worker or a raising build/solve within `retries`, and cancels running
+    tasks on `on_error: stop` or a cancelled command.
+  - Workers get `OMP/MKL/OPENBLAS_NUM_THREADS=1`; `num_cpus`, `memory` and
+    `max_calls` are configurable.
+  - Hooks must be importable by name, checked before anything runs.
+  - `fit_surrogate` variants also fit on Ray: data is prepared once in the
+    main process and shared with `ray.put`.
+  - New config fields: `execution.ray_address`, `execution.resources`
+    (`num_cpus`, `memory`) and `execution.max_calls`. Also new:
+    `FitParams.ray_address`, `Orchestrator(ray_address=)` (default
+    `FLEXORCH_RAY_ADDRESS`), `execute_study(ray_address=)` and
+    `flex-orch run --ray-address`.
+  - Local Ray starts with `namespace="flexorch"` and no dashboard.
+  - `TaskResult` reports `seconds` (build, solve, export, store) and the
+    worker's `rss_mb`.
+  - The task is now three steps, `prepare` / `execute` / `finish`, in
+    `study.task`.
+  - `deploy/ray/` has per-tenant Ray cluster templates (compose and KubeRay)
+    and the opt-in benchmark `study/tests/test_benchmark_ray.py`.
+  - New optional dependency extra `ray`.
+- Result runs record the hooks a task actually used (`flexorch_hooks`),
+  including a study's build hook.
 - Study export and import (PLAN.md D17, M3): `flex_orchestrator.archive` with
   `export_study` / `export_result` (a `flexorch-export/1` folder of JSON
   files, written to a temporary folder and renamed into place, with

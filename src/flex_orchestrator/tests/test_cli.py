@@ -110,10 +110,13 @@ def test_run_a_study_config(orch, capsys, tmp_path):
     code, _, err = run(capsys, "run", str(config))
     assert code == 1 and "Name the study" in err
     config.write_text("study: t\nbase_model_spec: base\n")
-    code, out, err = run(capsys, "run", str(config), "--workers", "2")
-    assert code == 1 and "arrives with M5" in err
-    with pytest.raises(SystemExit):
-        cli.main(["run", str(config), "--ray-address", "ray://x"])
+    seen = {}
+    orch.execute_study = lambda cfg, **kwargs: seen.update(kwargs) or {"ok": 1}
+    code, out, _ = run(
+        capsys, "run", str(config), "--workers", "2", "--ray-address", "ray://h:1"
+    )
+    assert code == 0 and seen["max_workers"] == 2
+    assert seen["ray_address"] == "ray://h:1"
 
 
 def test_cmd_selects_a_study_first(orch, capsys):

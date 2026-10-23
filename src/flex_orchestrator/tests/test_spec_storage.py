@@ -215,3 +215,27 @@ def test_a_taken_tag_is_refused_before_reading_files(orch, tariff_dir, tmp_path)
     base = orch.store_model_spec("base", tariff_spec(), base_dir=tariff_dir)
     with pytest.raises(TagExistsError):
         orch.store_model_spec("base", base.spec, base_dir=tmp_path)
+
+
+@pytest.mark.unit
+def test_a_study_run_reads_each_spec_once(monkeypatch):
+    from flex_orchestrator import orchestrator as module
+    from flex_orchestrator.testing import memory_orchestrator
+
+    orch = memory_orchestrator(study="s")
+    orch.store_model_spec("a", {"value": 1})
+    reads = []
+    real = module.spec_store.read
+    monkeypatch.setattr(
+        module.spec_store, "read", lambda *a: reads.append(a) or real(*a)
+    )
+    with orch._caching_specs():
+        assert orch.model_spec("a") == orch.model_spec("a")
+        assert len(reads) == 1
+        orch.store_model_spec("b", {"value": 2}, parent="a")  # parent from the cache
+        assert orch.model_spec("b").spec == {"value": 2} and len(reads) == 1
+        orch.delete("model_spec", "b")
+        with pytest.raises(LookupError):
+            orch.model_spec("b")
+    orch.model_spec("a")
+    assert len(reads) == 2  # outside the block, reads go to the store again

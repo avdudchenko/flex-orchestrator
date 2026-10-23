@@ -509,8 +509,6 @@ def test_fit_params_errors(orch):
         ).expand()
     with pytest.raises(FitError, match="no variants"):
         FitParams(tag="a_{name}", X=X, y=Y, regressor="multilinear").expand()
-    with pytest.raises(FitError, match="arrives with M5"):
-        fit(orch, tag="a", regressor="multilinear", max_workers=2)
 
 
 def test_units_are_needed_by_flexpse_regressors(orch):

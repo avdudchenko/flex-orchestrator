@@ -213,21 +213,53 @@ class ExportConfig(_Strict):
     strict_units: bool = False
 
 
-class Execution(_Strict):
-    """How tasks run.
+class Resources(_Strict):
+    """What each Ray task reserves (D13).
 
     Attributes:
-        max_workers: Tasks run at once; more than 1 needs Ray (M5).
-        task_timeout_s: A task's time limit. Enforced by Ray (M5); in-process
-            it is recorded but not enforced.
-        retries: How many times a task whose build or solve raised is tried
-            again.
+        num_cpus: CPUs per task; Ray runs as many at once as the cluster
+            fits, up to ``max_workers``.
+        memory: Bytes of memory per task, or ``None`` to reserve none.
+    """
+
+    num_cpus: float = Field(default=1.0, gt=0)
+    memory: float | None = Field(default=None, gt=0)
+
+
+class Execution(_Strict):
+    """How tasks run (D13).
+
+    ``max_workers: 1`` (the default) runs the tasks one after another in this
+    process. More than 1 runs them on Ray: a local Ray started for this
+    process (``namespace="flexorch"``), the one already connected, or the
+    cluster at ``ray_address``. Either way the main process stores every
+    result, so workers never hold database credentials.
+
+    Attributes:
+        max_workers: Tasks run at once.
+        ray_address: A Ray cluster, e.g. ``"ray://tenant-ray-head:10001"``;
+            local Ray if ``None``. Its workers need flex-orchestrator and the
+            hooks' modules installed.
+        resources: What each task reserves on Ray.
+        max_calls: Restart a Ray worker process after this many tasks, to
+            keep memory bounded; ``None`` never restarts.
+        task_timeout_s: A task's time limit on Ray, counted from when it's
+            submitted, so it includes starting a worker (a few seconds the
+            first time). A task that runs over is killed and stored as a failed
+            result (``termination: timeout``); it isn't retried. Two hours by
+            default; ``None`` means no limit. In-process the limit is recorded
+            but not enforced.
+        retries: How many times a task is tried again when building raises,
+            the solve hook raises, or its Ray worker dies.
         on_error: Go on with the other tasks after one fails (``continue``) or
-            stop (``stop``).
+            stop (``stop``); on Ray, ``stop`` cancels the tasks still running.
     """
 
     max_workers: int = Field(default=1, ge=1)
-    task_timeout_s: float | None = Field(default=None, gt=0)
+    ray_address: str | None = None
+    resources: Resources = Field(default_factory=Resources)
+    max_calls: int | None = Field(default=None, ge=1)
+    task_timeout_s: float | None = Field(default=7200.0, gt=0)
     retries: int = Field(default=0, ge=0)
     on_error: Literal["continue", "stop"] = "continue"
 

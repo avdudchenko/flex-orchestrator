@@ -178,7 +178,10 @@ class FitParams(_Strict):
             or ``replace`` it.
         store_series: Also store ``actual`` / ``fitted`` / ``residual``
             timeseries with the fit, for plotting.
-        max_workers: Variants fitted at once; more than 1 needs Ray (M5).
+        max_workers: Variants fitted at once; more than 1 fits them on Ray
+            (D13). In a study, the study's ``execution`` decides instead.
+        ray_address: The Ray cluster for ``max_workers > 1``; local Ray if
+            ``None``.
     """
 
     tag: str
@@ -194,6 +197,7 @@ class FitParams(_Strict):
     on_existing: Literal["error", "skip", "replace"] = "error"
     store_series: bool = False
     max_workers: int = Field(default=1, ge=1)
+    ray_address: str | None = None
 
     def expand(self) -> list["FitPlan"]:
         """Return one :class:`FitPlan` per variant (one if there are none).
@@ -204,7 +208,9 @@ class FitParams(_Strict):
         variants = self.variants or [None]
         plans, tags = [], set()
         for variant in variants:
-            fields = self.model_dump(exclude={"variants", "on_existing", "max_workers"})
+            fields = self.model_dump(
+                exclude={"variants", "on_existing", "max_workers", "ray_address"}
+            )
             name = None
             if variant is not None:
                 name = variant.name
