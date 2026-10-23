@@ -29,6 +29,9 @@ from flex_orchestrator.backend.base import (
 from flex_orchestrator.errors import StorageError
 
 QUDT_UNIT = "http://qudt.org/vocab/unit/"
+_QUDT_SCHEMA = "http://qudt.org/schema/qudt/"
+_BRICK_REF = "https://brickschema.org/schema/Brick/ref#"
+_ACQ = "urn:acquirium#"
 
 
 class AcquiriumBackend:
@@ -230,6 +233,109 @@ class AcquiriumBackend:
             else:
                 found.append(Record(variable.label, variable.kind, observation.value))
         return found
+
+    # The general store: streams outside the experiment ledger (D19 selectors).
+
+    def stream_rows(
+        self, ref: str, start: Any = None, end: Any = None
+    ) -> list[tuple[Any, float]]:
+        """Return a stream's samples, oldest first, as UTC ``(time, value)`` rows.
+
+        Args:
+            ref: The stream's reference URI.
+            start: Only samples at or after this datetime.
+            end: Only samples at or before this datetime.
+        """
+        frame = _call(
+            self.acquirium.client.timeseries_df,
+            ref,
+            start=None if start is None else to_utc(start).isoformat(),
+            end=None if end is None else to_utc(end).isoformat(),
+        )
+        if frame.is_empty():
+            return []
+        return [
+            (to_utc(when), value)
+            for when, value in zip(
+                frame["ts"].to_list(), frame["value"].to_list(), strict=True
+            )
+            if value is not None
+        ]
+
+    def sparql_select(self, query: str) -> dict[str, Any]:
+        """Run a read-only SPARQL query; return ``{"columns", "rows"}``."""
+        result = _call(self.acquirium.client.sparql_query, query)
+        return {"columns": list(result["columns"]), "rows": list(result["rows"])}
+
+    def stream_info(self, refs: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Return each stream's ``name`` (its source-local name), ``label`` and unit.
+
+        The unit is the QUDT key on the stream, or on the point that refers to
+        it; ``None`` if neither has one.
+        """
+        info = {ref: {"name": None, "label": None, "unit": None} for ref in refs}
+        if not refs:
+            return info
+        values = " ".join(f"<{ref}>" for ref in refs)
+        query = f"""PREFIX ref: <{_BRICK_REF}>
+PREFIX qudt: <{_QUDT_SCHEMA}>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?ref ?name ?label ?unit WHERE {{
+  VALUES ?ref {{ {values} }}
+  OPTIONAL {{ ?ref <{_ACQ}refName> ?name }}
+  OPTIONAL {{ ?point ref:hasExternalReference ?ref .
+             OPTIONAL {{ ?point rdfs:label ?label }}
+             OPTIONAL {{ ?point qudt:hasUnit ?pointUnit }} }}
+  OPTIONAL {{ ?ref qudt:hasUnit ?refUnit }}
+  BIND(COALESCE(?refUnit, ?pointUnit) AS ?unit)
+}}"""
+        for ref, name, label, unit in self.sparql_select(query)["rows"]:
+            found = info[ref]
+            found["name"] = found["name"] or name
+            found["label"] = found["label"] or label
+            if unit and not found["unit"]:
+                found["unit"] = unit.rsplit("/", 1)[-1]
+        return info
+
+    def find_streams(self, text: str) -> list[dict[str, Any]]:
+        """Find the streams whose point's label matches ``text``.
+
+        A label equal to ``text`` (ignoring case) wins; failing that, every
+        label containing all of its words. With no label match, ``text`` is
+        resolved to a concept with Acquirium's ``resolve`` and that concept's
+        streams are returned.
+
+        Returns:
+            ``[{"ref", "label", "point"}]``, sorted by label.
+        """
+        query = f"""PREFIX ref: <{_BRICK_REF}>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?point ?label ?ref WHERE {{
+  ?point ref:hasExternalReference ?ref .
+  ?point rdfs:label ?label .
+}}"""
+        rows = [
+            {"point": point, "label": label, "ref": ref}
+            for point, label, ref in self.sparql_select(query)["rows"]
+        ]
+        wanted = text.strip().lower()
+        exact = [r for r in rows if r["label"].strip().lower() == wanted]
+        words = wanted.split()
+        matched = exact or [
+            r for r in rows if all(w in r["label"].lower() for w in words)
+        ]
+        if not matched:
+            concept = _call(self.acquirium.client.resolve, text)
+            if concept is not None:
+                query = (
+                    f"PREFIX ref: <{_BRICK_REF}>\nSELECT ?ref WHERE {{ <{concept}> "
+                    "ref:hasExternalReference ?ref }"
+                )
+                matched = [
+                    {"point": concept, "label": text, "ref": ref}
+                    for (ref,) in self.sparql_select(query)["rows"]
+                ]
+        return sorted(matched, key=lambda r: (r["label"], r["ref"]))
 
     def _study(self, name: str) -> Any:
         if name not in self._studies:

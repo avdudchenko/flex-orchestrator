@@ -119,10 +119,18 @@ class SolveFn(Protocol):
   default.
 - Optional hook `time_sets(model) -> [Set, ...]`: the model's time Sets, main one first, for the exporter (D3).
   The flex-pse default adds the partial-horizon Sets flex-pse logic builds.
+- Optional hook `configure(spec, path, value) -> spec`: sets one configuration option in a copy of a spec, for
+  `configuration_option` sweeps (**built**). The flex-pse default reads `path` as an element's name (the longest
+  leading part that names one, so any unit or block works) followed by the option: a unit's
+  `construction_options` entry, or another element's own field (`"costing.energy_prices.electrical"`). A dict
+  option is set whole by a dict value, or one key at a time by a longer path (`"plant.feed.max_withdrawal.value"`);
+  missing dicts on the way are created.
 - The defaults live in `flex_orchestrator.flexpse` and target flex-pse 0.2 (**built**):
   - `build` adds each override as a flex-pse `fix` element (`"override:<path>"`), then calls `flexops.build_model`.
     An override path is a variable path from the model root (`"demo.pump.flow_in"`, `"...flow_in[3]"`, `"...[*]"`),
-    and its value is a number or `{"value", "units"}`. Price sweeps edit the `costing` element instead (M4).
+    and its value is a number or `{"value", "units"}`. Price sweeps edit the `costing` element instead: a path whose
+    first part names a `costing` element and whose next part is one of its fields
+    (`"costing.energy_prices.electrical"`) sets that field (**built**, M4).
   - `solve` calls `get_solver` (preferring the spec's `solver`) and maps the termination to `SolveOutcome`.
   - `apply_surrogate` adds a `surrogate` element, replacing one for the same unit and relation;
     `swap_surrogate` applies the same element to a live model with `flexops.apply_spec`.
@@ -497,7 +505,8 @@ backends). The race check is tested by letting a rival write land between the ta
 | `<s>::data` | one `store_data` call | `manifest` (`.json`) plus one `.timeseries(unit=)` per column |
 | `<s>::specs` | one `store_model_spec` / `store_surrogate_spec` call | `spec` (`.json`); metadata `{flexorch_kind, flexorch_tag, spec_hash, parent_tag, spec_format}` |
 | `<s>::runs` | one model solve | inputs `model_spec_ref` (`.json`), `overrides` (`.json`); outputs `model_values` (`.table`), `model_manifest` (`.json`), the `streams=` keys as native variables (D3, D5), `solve_outcome` (`.json`); log `solver events` |
-| `<s>::fits` | one `fit_surrogate` variant (D19) | inputs `selectors`, `resolved_refs`, `prep`, `regressor`, `params` (`.json`); outputs `fit_result`, `diagnostics` (`.json`), optional `fitted`/`actual`/`residual` (`.timeseries`); metadata `{flexorch_tag, data_hash, spec_tag}` |
+| `<s>::fits` | one `fit_surrogate` variant (D19) | inputs `fit_params` (the fit as planned, selectors as sent), `training_data` (what they resolved to, prep steps, rows, units, `data_hash`) (`.json`); outputs `fit_result` (coefficients, metrics, diagnostics, holdout) (`.json`), optional `fit_series` (`.table`: `actual`/`fitted`/`residual`); metadata `{flexorch_kind: "fit", flexorch_tag, regressor, data_hash}` |
+| `flexorch::commands` | one command call (D18) | input `params`, output `result` (`.json`); metadata `{flexorch_kind: "command", flexorch_tag: <command>, flexorch_study, flexorch_runtime}` |
 
 Every run's metadata also records the orchestrator, flex-pse and Acquirium versions, the user (from the environment
 in Phase 1, from the token in Phase 2), and the hook names, so a result can be reproduced.
@@ -511,8 +520,10 @@ in Phase 1, from the token in Phase 2), and the hook names, so a result can be r
 - `flexorch_connection`: `{mode, target}` with the redacted target (D11), when the orchestrator made the connection.
 
 Tested on both backends, so the nested values round-trip through Acquirium's metadata. `<s>::specs` and the result
-inputs `model_spec_ref` / `overrides` are **built** (M1; see D2 and D4). **Not yet:** `<s>::fits` (D19), and the
-`solver events` log (with M4's study runner).
+inputs `model_spec_ref` / `overrides` are **built** (M1; see D2 and D4); `<s>::fits` and `flexorch::commands` are
+**built** (M4; see D18 and D19). A fitted surrogate spec's metadata holds `fit_run_id` and `data_hash`; an imported
+item's holds `flexorch_imported_from` (D17). **Not yet:** the `solver events` log. The solve outcome's `log` field
+holds the solver output for now.
 
 **D11 — Connection modes and database credentials.** The library connects to exactly one Acquirium, which in
 deployment means one tenant. There are three modes:
@@ -663,6 +674,26 @@ orch.import_study("exports/example_a", name=None, on_existing="error")          
   across tenants.
 - CLI: `flex-orch export <study> <path>` and `flex-orch import <path>`. Phase 2 routes are in §4.
 
+**Built** (M3) in `flex_orchestrator.archive`, as specified, with these details settled:
+- **Layout.** A spec's referenced files are written under `specs/` by their stored names
+  (`specs/assets/<sha256[:12]>-<name>`), raw, so the spec file's paths point at them. `compress=True` gzips every
+  JSON file except `study.json` (`mtime=0`, so it's reproducible). `study.json` lists every other file;
+  `checksums.sha256` covers all of them.
+- **Result files** carry `keys` (walk order) and, for a series covering part of time (`startup`), `rows`: its
+  positions in `time_index`. Each value is aligned to `time_index`, `null` where missing. `time_index` has no `set`
+  name (the exporter doesn't keep it), and runs have no finish time in the storage contract, so there's no
+  `finished_at`. Only succeeded results are exported.
+- **Fit files** (`fits/<tag>.json`) hold the fit run's records; `series` when it stored one.
+- **Import** checks the schema of every file and every checksum (and that the checksum list matches the manifest)
+  before writing, then imports fits, specs (parents first), datasets and results. Specs are written as stored
+  (their hash is verified, not recomputed from a re-normalised spec), a surrogate spec's `fit_run_id` is remapped to
+  the new fit run, and a result keeps its original `flexorch_hooks`. Each item's metadata records
+  `flexorch_imported_from: {study, exported_at, exported_by, run_id, metadata}`. `on_existing="skip"` imports into an
+  existing study, skipping the items it has. A result whose spec is stored with another hash is refused; one whose
+  spec isn't in the export is imported unlinked.
+- `tenant` is `None` in Phase 1. The JSON Schemas are in `docs/schemas/` (`python -m flex_orchestrator.schemas`
+  writes them; a test checks they're current).
+
 **D18 — Extension API: commands, plugins, subclassing, custom routes.** Users can extend the orchestrator without
 forking it. **Commands are the main extension point.** They live in the core library (Phase 1, no FastAPI), and
 Phase 2 exposes them over HTTP automatically. Custom FastAPI routes come in Phase 2 and inherit auth and tenant checks
@@ -768,6 +799,23 @@ plugin = Plugin(
 - `PLUGIN_API_VERSION` follows semver, separately from the package version, and changes are recorded in the
   changelog.
 
+**Built** (M4, the core part) in `flex_orchestrator.ext`, with these details settled:
+- **Commands.** `fn(orch, params, progress, **runtime)`; a command needing less may take `(orch)` or
+  `(orch, params)`. `runtime` carries what JSON can't (a `build=` callable from `orch.execute_study`) and is recorded
+  only as import strings. Calls are recorded in `flexorch::commands` (one ledger per store, the Phase 1 tenant);
+  `role` and `long_running` are recorded for Phase 2. `orch.register_command()` adds one without a plugin.
+- **Plugins.** `Orchestrator(plugins=[...])` loads the ones passed (objects or installed names) plus those in
+  `FLEXORCH_PLUGINS`; `ext.create_orchestrator(...)` also builds a plugin's subclass (a plain `Orchestrator` with a
+  subclass-providing plugin warns). A bare import string in `Plugin.hooks` is registered for every hook slot.
+  `routers` are kept, unmounted, until the Phase 2 server. `PLUGIN_API_VERSION` is `1.0.0`; ranges are
+  comma-separated `>=`, `>`, `<=`, `<`, `==`, `!=` clauses.
+- **Events** add `data_stored` and `fit_stored` to the list above; a listener that raises propagates (the item is
+  already stored). `before_store(item)` gets a `StoreItem(kind, tag, metadata)`: it raises to refuse, or adds
+  metadata, which can't replace the orchestrator's own keys.
+- **Testing helpers:** `memory_orchestrator()` (fake hooks, no allowlist) and `run_command_in_test()`.
+- **Sample plugin:** `examples/plugins/ro_tools/` (setuptools, so it builds offline), with a command, named hooks
+  and a subclass overriding `before_store` and `default_export_selection`.
+
 **D19 — Regression as a command (`fit_surrogate`).** Fitting surrogates from data stored in Acquirium is a
 **built-in D18 command**. So it is available in Python (`orch.fit_surrogate(...)` / `orch.run_command("fit_surrogate",
 ...)`), from the CLI (`flex-orch cmd fit_surrogate`), and over HTTP (`POST /commands/fit_surrogate`, Phase 2) with
@@ -868,6 +916,27 @@ POST /tenant-a/commands/fit_surrogate            (editor token; body = the same 
 → 202 {"job_id": "…"}
 GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas_h1","biogas_h2"], "fit_runs": [...], "diagnostics": {...}}}
 ```
+
+**Built** (M4) in `flex_orchestrator.fitting` and `flexpse/regression.py`, with these details settled:
+- **Selectors.** All six kinds. The general-store ones (`ref_uris`, `resolve`, `sparql`) need a backend with the
+  optional `StreamStore` methods (the Acquirium backend has them). `resolve` matches stream labels through SPARQL
+  (an equal label first, then labels containing every word) and falls back to Acquirium's `resolve` for a concept's
+  streams; a local server started with `exact_only=True` does no fuzzy text search, so label matching is what finds
+  a historian tag. A column is named by the stream's source-local name unless `rename`d. `units` takes a Pyomo unit
+  or a QUDT key and converts with pint, so it doesn't call Acquirium.
+- **Units to the regressor** go by signature: `fit` and `to_surrogate_spec` get `input_units` / `output_units` when
+  they take them, so the same path serves flex-pse's and user regressors. A column the regressor needs a unit for
+  must have one. QUDT keys convert to Pyomo units by reversing the D3 rule (`export.units.qudt_to_pyomo`).
+- **Prep** adds `gaps: drop`. Data is loaded and prepared once per distinct selection; variants that change
+  `X`, `y`, `window` or `prep` load their own.
+- **Validation:** `{"holdout": "7D"}` fits on the rows before the last 7 days and reports `rmse`, `mae`, `mape` on
+  them, using the regressor's `predict` or, for the 0.2 types, `flexpse:predict_surrogate`.
+- **Stored:** see the D10 table. The surrogate spec gets `provenance.fit = {regressor, data_hash, n_samples,
+  data_window}`, so the same data gives an identical spec. Tags are checked before anything is fitted;
+  `on_existing` is `error`, `skip` or `replace`.
+- A `constant_intensity` surrogate is applied with the same `apply_surrogate` hook: flex-pse's surrogate element
+  fixes the unit's `energy_intensity`.
+- **Not yet:** variants on Ray (`max_workers > 1` raises; M5).
 
 **D12 — Python 3.12**, distribution `flex-orchestrator`, import `flex_orchestrator`, src layout, hatchling, pydantic v2.
 
@@ -1043,26 +1112,30 @@ src/flex_orchestrator/
   flexpse/               # optional default hooks (import guarded)
     build.py  solve.py  surrogate.py  regression.py   # regression.py: get_regressor hook over flexparameterize.regression
   study/
-    config.py            # StudyConfig schema (sweeps, hooks, output_name template, export selection)
-    expand.py            # sweep expansion → RunPlan list
-    task.py              # TaskSpec/TaskResult + run_task (build → solve → export; top-level, importable)
-    runner.py            # expand → dispatch (in-process loop or ray.remote + ray.wait) → write; timeouts, resume, progress
+    config.py            # StudyConfig schema (sweeps, hooks, output_name template, export selection), load_config
+    task.py              # TaskSpec/TaskResult + run_task (derive spec → build → solve → store; plain data, importable)
+    runner.py            # expand (sweeps → tasks) and the execute_study command (fits, then the in-process loop; Ray in M5)
   archive/               # D17 study export / import (named so it doesn't clash with export/, the model-data exporter)
-    schema.py            # pydantic models for flexorch-export/1 (study, spec, dataset, result) → JSON Schema
-    writer.py            # export_study / export_result: streaming, temp-folder-then-rename, checksums
-    reader.py            # load_result (no DB), import_study (checks schema + checksums, re-creates via store APIs)
+    models.py            # pydantic models for flexorch-export/1 (study, spec, dataset, fit, result) → JSON Schema
+    export.py            # export_study / export_result: streaming, temp-folder-then-rename, checksums
+    load.py              # read_json, load_result (no DB)
+    imports.py           # import_study (checks schema + checksums, re-creates via the store paths)
   fitting/               # D19 fit_surrogate command (core)
-    selectors.py         # JSON selectors → ref_uris + window (dataset, study, result, ref_uris, resolve, read-only sparql)
-    prep.py              # align, resample, gap policy, unit conversion, max_rows, data hash
-    fit.py               # regressor resolution (SurrogateType | import string), variants, validation, store spec + fit run
+    models.py            # Selector, Prep, Validation, Variant, FitParams (JSON), FitRecord, FitSummary
+    selectors.py         # selectors → frames + units + provenance (dataset, study, result, ref_uris, resolve, read-only sparql)
+    prep.py              # align, resample, gap policy, max_rows, holdout split, data hash
+    regress.py           # regressor resolution (SurrogateType | import string), fit, predict, metrics
+    store.py             # fit runs in <s>::fits
+    command.py           # the fit_surrogate command: variants, tag checks, store fit run + spec
   ext/                   # D18 (core, no FastAPI)
-    commands.py          # @command, CommandSpec, registry, run_command, Progress, command run ledger
+    commands.py          # @command, Command, CommandRegistry, Progress, the command run ledger
     plugins.py           # Plugin, entry-point discovery, FLEXORCH_PLUGINS allowlist, api_version check, collisions
     events.py            # lifecycle events + subscription
+  schemas.py             # the JSON Schemas published in docs/schemas/
   testing/               # D18 helpers for plugin authors (memory_orchestrator, run_command_in_test; Phase 2: make_test_app, token_for)
   ops/
     verify.py            # post-restore / health verification of a tenant store
-  cli.py                 # flex-orch run | ls | query | export | import | verify | cmd <name>   (Phase 2 adds: serve, login)
+  cli.py                 # flex-orch run | cmd <name> | commands | export | import  (built, M3/M4); ls | query | verify later; Phase 2 adds serve, login
   server/                # Phase 2 only
     app.py               # create_app(settings, plugins) factory — no module-level app
     deps.py              # get_orchestrator, current_principal, require_role, get_jobs, get_settings (public for plugins)
@@ -1149,11 +1222,18 @@ sweeps:
     unit: plant.digester
     relation: biogas_relation
     surrogates: [biogas_h1, biogas_h2]
-  - type: parameter
-    path: costing.electricity_price
+  - type: configuration_option            # how the model is built: a construction option or element field
+    name: price
+    path: costing.energy_prices.electrical
     values: [0.1, 0.2, 0.3]
+  - type: variable                        # a model variable, fixed to each value
+    path: plant.digester.temperature
+    values: [35, 40]
+  # also: spec_list (a stored spec per task) and cases (named combinations:
+  #   {name, spec, surrogates: {unit: tag}, configuration_options: {...}, variables: {...}})
+combine: product                         # product (nested) | zip (in step)
 export: {include: ["costing.*", "plant.digester.*"], strict_units: true}
-output_name: "model_with_surrogate_{surrogate}_price_{costing.electricity_price}"
+output_name: "model_with_surrogate_{surrogate}_price_{price}_{plant.digester.temperature}"
 on_existing: error                       # error | skip (resume) | replace (write, then delete the old)
 execution: {max_workers: 8, task_timeout_s: 1800, retries: 1, on_error: continue}
 ```
@@ -1188,8 +1268,12 @@ under `examples/` runs from start to finish.
 synthetic RO data generated from a parabolic specific-energy curve, builds a tariff-priced feed → RO → tank →
 product model in Python, emits its spec (`emit_model`) and stores it, fits an average intensity
 (`ConstantIntensityRegressor`) and a linear power surrogate (`LinearRegressor`), solves the model with each, and
-compares each model's RO energy with the true curve. `test_examples.py` runs it (integration tier). The
-dict-driven version of the same experiment waits for `execute_study` (M4).
+compares each model's RO energy with the true curve. `examples/ro_study/` runs the same model as `StudyConfig`
+dicts, one script per kind of sweep: `sweep_surrogates.py` (`fits` with the built-in regression, then a surrogate
+sweep; it reproduces `ro_surrogates` exactly and is the M4 "script 3"), `sweep_variables.py`,
+`sweep_configuration.py` (the feed's `max_withdrawal`), `sweep_nested.py` (surrogate × withdrawal; stores the full model, exports the study and checks every value read back) and
+`sweep_cases.py`. `examples/plugins/ro_tools/` is the sample plugin. `test_examples.py` runs them all
+(integration tier).
 
 ### Phase 1: core library
 
@@ -1260,10 +1344,18 @@ dict-driven version of the same experiment waits for `execute_study` (M4).
   - Importing it under a new name and exporting again gives files identical to the first export, apart from the
     provenance fields (run ids and timestamps).
   - `load_result` rebuilds the same frames and units with no database.
+- **Status: exit met.** The scripts 1 and 2 the exit names were removed with the quickstart, so the exit is checked
+  on stand-ins (`archive/tests/test_archive.py`, both backends): a study with a spec and its file, a derived spec, a
+  dataset, a fit with its series and results (one covering part of time, with a stale value and a non-string index)
+  exports to the D17 layout and every file validates against the published schemas (`jsonschema`); importing it
+  under a new name and exporting again gives the same files apart from provenance (run ids, timestamps, the study
+  name, `flexorch_imported_from`, `fit_run_id`), and byte-identical asset files; `load_result` gives the same frames,
+  scalars and units as the stored result. Checksums, schema versions and spec hashes are checked on import. The CLI
+  exports and imports in the plugin's integration test.
 
 #### M4 — Declarative studies (`execute_study`), commands/plugins, regression (≈ 4 wks)
-- `StudyConfig` plus its JSON schema, hook import strings, sweeps (`surrogate`, `parameter`, `spec_list`; product
-  or zip), `output_name`, `on_existing`, and `export`.
+- `StudyConfig` plus its JSON schema, hook import strings, sweeps (`surrogate`, `variable`,
+  `configuration_option`, `spec_list`, `cases`; product or zip), `output_name`, `on_existing`, and `export`.
 - `--dry-run`, `study/task.py`, and the in-process loop (`max_workers=1`) with resume.
 - CLI: `flex-orch run study.yaml [--workers N] [--ray-address ...]`.
 - **Extension API, core part (D18):**
@@ -1292,6 +1384,20 @@ dict-driven version of the same experiment waits for `execute_study` (M4).
   - The sample plugin, installed with pip, loads only when it is in the allowlist. Its command gives the same result
     from Python and from the CLI.
   - An orchestrator subclass provided by the plugin overrides `before_store` and `default_export_selection`.
+- **Status: exit met, apart from what M5 brings.** Checked by:
+  - `study/tests/test_study_flexpse.py` (both backends, HiGHS): one `StudyConfig` fits two `multilinear` variants
+    of the RO's power from two windows of a stored dataset and a `constant_intensity` one, swaps each into the RO
+    and solves; the fits come out as generated (2.8 and 3.4 kWh/m³) and the costs order accordingly. Refitting the
+    same data gives the same `data_hash` and spec hashes. The exit's digester and pump are stand-ins from the
+    pseudocode; the RO plays both parts here. A `configuration_option` sweep sets the feed's `max_withdrawal`
+    and the tank's `max_volume.value`, and another sweeps a price (the costing element).
+  - Script 3 is `examples/ro_study/sweep_surrogates.py`, in-process. `on_existing: skip` does nothing new on a rerun, and
+    `on_existing: error` raises before anything runs (tested in both suites).
+  - The sample plugin, pip-installed into a temporary folder, loads only when `FLEXORCH_PLUGINS` lists it; its
+    `cost_table` gives the same result from Python and from `flex-orch cmd`; its subclass's `before_store` and
+    `default_export_selection` apply, and its own tests pass (`test_examples.py`).
+  - **Not yet:** `max_workers > 1`, `--workers N > 1` and `--ray-address` (Ray, M5) raise a clear error;
+    `task_timeout_s` is recorded but only enforced on Ray; the `solver events` log (D10).
 
 #### M5 — Ray parallel execution (≈ 1–1.5 wks)
 - Ray dispatch in `runner.py`:

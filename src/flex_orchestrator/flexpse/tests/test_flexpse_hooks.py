@@ -18,6 +18,7 @@ from flex_orchestrator.flexpse import (  # noqa: E402
     DEFAULT_RELATION,
     apply_surrogate,
     build,
+    configure,
     solve,
     swap_surrogate,
     time_sets,
@@ -46,6 +47,7 @@ def test_default_hooks_resolve_to_flexpse_functions():
     assert resolved.apply_surrogate is apply_surrogate
     assert resolved.swap_surrogate is swap_surrogate
     assert resolved.time_sets is time_sets
+    assert resolved.configure is configure
 
 
 @pytest.mark.unit

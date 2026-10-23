@@ -78,3 +78,50 @@ class TagNotFoundError(FlexOrchestratorError, LookupError):
 
 class AmbiguousColumnError(FlexOrchestratorError, LookupError):
     """A column name looked up across datasets is in more than one (PLAN.md D6)."""
+
+
+class StudyConfigError(FlexOrchestratorError):
+    """A study config (``StudyConfig``) is invalid or can't be expanded (PLAN.md M4).
+
+    Raised for a config that fails validation, an ``output_name`` that renders
+    an invalid or repeated tag, sweeps of different lengths with
+    ``combine: zip``, and execution options this version can't run.
+    """
+
+
+class FitError(FlexOrchestratorError):
+    """A surrogate can't be fitted from the data selected (PLAN.md D19).
+
+    Raised for a selector that matches nothing (or, for ``resolve``, more than
+    one stream), data that can't be aligned or has gaps, units that don't
+    convert, and a regressor that can't be resolved or fails.
+    """
+
+
+class CommandError(FlexOrchestratorError):
+    """A command can't be found, registered or run (PLAN.md D18).
+
+    Raised for an unknown command, a name registered twice, and parameters that
+    don't validate against the command's params model.
+    """
+
+
+class CommandCancelled(CommandError):
+    """A command stopped because its ``Progress`` was cancelled (PLAN.md D18)."""
+
+
+class PluginError(FlexOrchestratorError):
+    """A plugin can't be loaded (PLAN.md D18).
+
+    Raised for a plugin whose ``api_version`` doesn't include this version's
+    ``PLUGIN_API_VERSION``, a name that isn't installed, and collisions between
+    plugins (command or hook names, or two orchestrator subclasses).
+    """
+
+
+class ArchiveError(FlexOrchestratorError):
+    """A study export can't be written or read back (PLAN.md D17).
+
+    Raised for an export into a folder that isn't empty, a file whose schema
+    version this version doesn't read, and a checksum that doesn't match.
+    """

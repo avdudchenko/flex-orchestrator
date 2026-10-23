@@ -7,6 +7,57 @@
   reference is stored as `{"$source": ...}`, not `{"source": ...}`.
 
 ### Added
+- Study export and import (PLAN.md D17, M3): `flex_orchestrator.archive` with
+  `export_study` / `export_result` (a `flexorch-export/1` folder of JSON
+  files, written to a temporary folder and renamed into place, with
+  `checksums.sha256` and optional gzip), `load_result` (no database) and
+  `import_study` (checks schemas and checksums, re-creates the study through
+  the store paths, keeps tags, spec hashes and hooks, records
+  `flexorch_imported_from`). `Orchestrator.export_study`, `.export_result`,
+  `.import_study`. JSON Schemas in `docs/schemas/`
+  (`python -m flex_orchestrator.schemas`). New `ArchiveError`.
+- Commands, plugins and events (PLAN.md D18): `flex_orchestrator.ext` with
+  `@command`, `Command`, `CommandRegistry`, `Progress`, `Plugin`
+  (`PLUGIN_API_VERSION` 1.0.0, the `flex_orchestrator.plugins` entry-point
+  group, the `FLEXORCH_PLUGINS` allowlist, collision checks),
+  `create_orchestrator`, and lifecycle events. `Orchestrator(plugins=...)`,
+  `.run_command`, `.register_command`, `.on`, and the stable methods
+  `build_hooks`, `default_export_selection`, `before_store`, `after_store`,
+  `on_task_result`, `on_study_created`. Every command call is recorded in
+  `flexorch::commands`. Testing helpers `memory_orchestrator` and
+  `run_command_in_test`. New `CommandError`, `CommandCancelled`,
+  `PluginError`.
+- Regression (PLAN.md D19): the built-in `fit_surrogate` command
+  (`Orchestrator.fit_surrogate`, `flex_orchestrator.fitting`): dataset,
+  other-study, result, `ref_uris`, `resolve` and read-only `sparql`
+  selectors; alignment, resampling and gap handling; variants; holdout
+  validation; flex-pse's `multilinear` and `constant_intensity` regressors or
+  any class by import string. Each fit stores its surrogate spec and a fit run
+  in `<s>::fits` with the training data's provenance and `data_hash`. The
+  Acquirium backend reads general-store streams (`stream_rows`,
+  `sparql_select`, `stream_info`, `find_streams`). flex-pse hooks
+  `get_regressor` and `predict_surrogate`; `export.units.qudt_to_pyomo` and
+  `pyomo_unit_of`. New `FitError`.
+- Declarative studies (PLAN.md M4): `flex_orchestrator.study` with
+  `StudyConfig` (fits; `surrogate`, `variable`, `configuration_option`,
+  `spec_list` and `cases` sweeps, combined as a product or zipped;
+  `output_name`, `on_existing`, `export`, `execution`), `expand`,
+  `TaskSpec` / `TaskResult` / `run_task`, and the built-in `execute_study`
+  command (`Orchestrator.execute_study`, with `dry_run`). New `StudyConfigError`.
+  `output_name` fields take Python format specs (`{price:.2f}`); values
+  are otherwise written exactly, with `e+` written as `e`.
+- A `configure` hook slot and its flex-pse default
+  `flex_orchestrator.flexpse.configure(spec, path, value)`: sets a unit's
+  construction option or another element's field, named by the element's
+  path and the option (dict options whole or one key at a time). The
+  flex-pse build hook also edits `costing` element fields named by an
+  override.
+- The `flex-orch` CLI: `run`, `cmd` (options from the command's params
+  model), `commands`, `export` and `import`. New dependency `pyyaml`.
+- `examples/ro_study/`: the `ro_surrogates` model as study configs, one
+  script per sweep (surrogates, variables, configuration options, nested
+  with a full-model export,
+  cases), and the sample plugin `examples/plugins/ro_tools/`.
 - User-replaceable build and solve hooks (PLAN.md D1): `BuildFn`, `SolveFn`,
   `ApplySurrogateFn` and `SwapSurrogateFn` protocols, `SolveOutcome`, `HookSet`,
   `HookRegistry` (callables, registered names and import strings), and

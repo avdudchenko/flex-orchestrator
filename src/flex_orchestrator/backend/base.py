@@ -212,6 +212,27 @@ class StorageBackend(Protocol):
         """
 
 
+class StreamStore(Protocol):
+    """Optional: a backend that also reads the general store's streams.
+
+    Streams outside the experiment ledger (a plant historian's, say) are what
+    the ``ref_uris``, ``resolve`` and ``sparql`` fit selectors read (D19). The
+    Acquirium backend has them; the memory backend doesn't.
+    """
+
+    def stream_rows(self, ref: str, start: Any = None, end: Any = None) -> list[Row]:
+        """Return a stream's samples between ``start`` and ``end``, oldest first."""
+
+    def sparql_select(self, query: str) -> dict[str, Any]:
+        """Run a read-only SPARQL query; return ``{"columns", "rows"}``."""
+
+    def stream_info(self, refs: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Return ``{ref: {"name", "label", "unit"}}``; the unit is a QUDT key."""
+
+    def find_streams(self, text: str) -> list[dict[str, Any]]:
+        """Return ``[{"ref", "label", "point"}]`` for streams matching ``text``."""
+
+
 def to_utc(when: Any) -> datetime:
     """Return ``when`` as a timezone-aware UTC datetime.
 

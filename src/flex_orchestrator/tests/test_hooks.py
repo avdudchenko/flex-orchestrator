@@ -157,6 +157,7 @@ def test_default_hooks_are_flexpse_import_strings():
         "apply_surrogate",
         "swap_surrogate",
         "time_sets",
+        "configure",
     }
     assert all(ref.startswith("flex_orchestrator.flexpse:") for ref in refs.values())
 

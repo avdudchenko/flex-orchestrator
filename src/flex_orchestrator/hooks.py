@@ -5,7 +5,8 @@ or solve a model. A run is ``build(spec, **overrides)`` followed by
 ``solve(model, **options)``, and both steps are *hooks*: plain callables that
 follow :class:`BuildFn` and :class:`SolveFn`. Two optional hooks change the
 surrogate a unit uses, either in the spec before building
-(:class:`ApplySurrogateFn`) or on a live model (:class:`SwapSurrogateFn`).
+(:class:`ApplySurrogateFn`) or on a live model (:class:`SwapSurrogateFn`), and
+one sets a configuration option in a spec (:class:`ConfigureFn`).
 
 A hook can be given three ways, and a :class:`HookSet` slot accepts any of them:
 
@@ -29,7 +30,14 @@ from pydantic import BaseModel, ConfigDict, computed_field
 
 from flex_orchestrator.errors import HookError
 
-HOOK_KINDS = ("build", "solve", "apply_surrogate", "swap_surrogate", "time_sets")
+HOOK_KINDS = (
+    "build",
+    "solve",
+    "apply_surrogate",
+    "swap_surrogate",
+    "time_sets",
+    "configure",
+)
 """tuple[str, ...]: The hook slots a :class:`HookSet` has."""
 
 SolveStatus = Literal["ok", "failed", "error"]
@@ -172,6 +180,29 @@ class SwapSurrogateFn(Protocol):
         """
 
 
+class ConfigureFn(Protocol):
+    """Sets one configuration option in a spec, so the next build uses it.
+
+    Example:
+        >>> def configure(spec, path, value) -> dict:
+        ...     return {**spec, path: value}
+    """
+
+    def __call__(self, spec: dict, path: str, value: Any) -> dict:
+        """Return a copy of ``spec`` with the option at ``path`` set to ``value``.
+
+        Args:
+            spec: The model spec. Must not be modified.
+            path: The option's dotted path, e.g. ``"plant.feed.max_withdrawal"``.
+                What it means is up to the hook; the flex-pse default reads it
+                as an element's name followed by one of its options.
+            value: The option's new value; any JSON value, a dict included.
+
+        Returns:
+            The new spec.
+        """
+
+
 class TimeSetsFn(Protocol):
     """Names a built model's time Sets, for the exporter (PLAN.md D3).
 
@@ -212,6 +243,7 @@ class HookSet:
         apply_surrogate: The optional :class:`ApplySurrogateFn`.
         swap_surrogate: The optional :class:`SwapSurrogateFn`.
         time_sets: The optional :class:`TimeSetsFn`.
+        configure: The optional :class:`ConfigureFn`.
 
     Example:
         >>> hooks = DEFAULT_HOOKS.merged(HookSet(build="mypkg.models:build"))
@@ -224,6 +256,7 @@ class HookSet:
     apply_surrogate: HookRef = None
     swap_surrogate: HookRef = None
     time_sets: HookRef = None
+    configure: HookRef = None
 
     def merged(self, other: "HookSet") -> "HookSet":
         """Return these hooks with every slot ``other`` sets taking precedence.
@@ -294,6 +327,7 @@ DEFAULT_HOOKS = HookSet(
     apply_surrogate="flex_orchestrator.flexpse:apply_surrogate",
     swap_surrogate="flex_orchestrator.flexpse:swap_surrogate",
     time_sets="flex_orchestrator.flexpse:time_sets",
+    configure="flex_orchestrator.flexpse:configure",
 )
 """HookSet: The flex-pse hooks, used when nothing else is configured."""
 
@@ -400,6 +434,7 @@ class HookRegistry:
         apply_surrogate: HookRef = None,
         swap_surrogate: HookRef = None,
         time_sets: HookRef = None,
+        configure: HookRef = None,
         replace: bool = False,
     ) -> HookSet:
         """Register a named set of hooks.
@@ -412,6 +447,7 @@ class HookRegistry:
             apply_surrogate: A callable or import string.
             swap_surrogate: A callable or import string.
             time_sets: A callable or import string.
+            configure: A callable or import string.
             replace: Allow replacing a set already registered under ``name``.
 
         Returns:
@@ -432,7 +468,9 @@ class HookRegistry:
                 f"Hooks {name!r} are already registered; pass replace=True to "
                 "replace them."
             )
-        hooks = HookSet(build, solve, apply_surrogate, swap_surrogate, time_sets)
+        hooks = HookSet(
+            build, solve, apply_surrogate, swap_surrogate, time_sets, configure
+        )
         for kind, hook in hooks.slots().items():
             if hook is None or callable(hook):
                 continue

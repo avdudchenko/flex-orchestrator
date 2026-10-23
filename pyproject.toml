@@ -11,7 +11,11 @@ dependencies = [
     "pydantic>=2",
     "polars>=1",
     "pandas>=2",
+    "pyyaml>=6",
 ]
+
+[project.scripts]
+flex-orch = "flex_orchestrator.cli:main"
 
 [project.optional-dependencies]
 # flex-pse is not on PyPI yet: the conda env files install it from a pinned git
@@ -24,6 +28,7 @@ dev = [
     "pytest-cov",
     "pytest-timeout",
     "import-linter",
+    "jsonschema",
     "ruff==0.15.20",
     "black==26.5.1",
     "pre-commit",

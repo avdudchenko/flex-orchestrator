@@ -6,8 +6,9 @@ functions by import string, so the rest of the library works without flex-pse
 installed. Specs are flex-pse flowsheet specs (schema ``0.1.0``).
 """
 
-from flex_orchestrator.flexpse.build import build, with_overrides
+from flex_orchestrator.flexpse.build import build, configure, with_overrides
 from flex_orchestrator.flexpse.export import time_sets
+from flex_orchestrator.flexpse.regression import get_regressor, predict_surrogate
 from flex_orchestrator.flexpse.solve import solve
 from flex_orchestrator.flexpse.specs import validate_model_spec, validate_surrogate_spec
 from flex_orchestrator.flexpse.surrogate import (
@@ -20,6 +21,9 @@ __all__ = [
     "DEFAULT_RELATION",
     "apply_surrogate",
     "build",
+    "configure",
+    "get_regressor",
+    "predict_surrogate",
     "solve",
     "swap_surrogate",
     "time_sets",

@@ -8,8 +8,14 @@ snapshot (:mod:`flex_orchestrator.results`), any values stored natively, and
 the ``solve_outcome`` JSON; ``s::data``, where each dataset is one run (D6,
 :mod:`flex_orchestrator.data`); and ``s::specs``, where each model or
 surrogate spec is one run with the files it references (D2,
-:mod:`flex_orchestrator.spec_store`). Every run's metadata also records the versions,
-the user, the hooks and the connection, so a result can be reproduced.
+:mod:`flex_orchestrator.spec_store`); and ``s::fits``, where each surrogate fit
+is one run with its training-data provenance (D19,
+:mod:`flex_orchestrator.fitting`). Every run's metadata also records the
+versions, the user, the hooks and the connection, so a result can be
+reproduced.
+
+Commands (D18) extend it: ``execute_study`` and ``fit_surrogate`` are built in,
+plugins add more, and every call is recorded in ``flexorch::commands``.
 
 Without a backend, the orchestrator connects to Acquirium itself, in one of
 the D11 modes (:mod:`flex_orchestrator.connection`).
@@ -20,6 +26,7 @@ import getpass
 import os
 import tempfile
 import threading
+import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
@@ -42,6 +49,20 @@ from flex_orchestrator.errors import (
     TagNotFoundError,
 )
 from flex_orchestrator.export import ModelData, UnitMapper, export_model_data
+from flex_orchestrator.ext.commands import (
+    COMMAND_KIND,
+    Command,
+    CommandRegistry,
+    Progress,
+    record_call,
+)
+from flex_orchestrator.ext.events import EventBus
+from flex_orchestrator.ext.plugins import (
+    Plugin,
+    hook_sets,
+    listeners,
+    load_plugins,
+)
 from flex_orchestrator.hooks import (
     DEFAULT_HOOKS,
     HookRegistry,
@@ -63,13 +84,25 @@ from flex_orchestrator.specs import (
 RESULT_KIND = "result"
 MODEL_SPEC = "model_spec"
 SURROGATE_SPEC = "surrogate_spec"
+FIT_KIND = "fit"
 LEDGERS = {
     RESULT_KIND: "runs",
     DATA_KIND: "data",
     MODEL_SPEC: "specs",
     SURROGATE_SPEC: "specs",
+    FIT_KIND: "fits",
 }
 """dict: Item kind -> the ledger study (``<s>::<ledger>``) that holds it (D10)."""
+STORED_EVENTS = {
+    RESULT_KIND: "result_stored",
+    DATA_KIND: "data_stored",
+    MODEL_SPEC: "spec_stored",
+    SURROGATE_SPEC: "spec_stored",
+    FIT_KIND: "fit_stored",
+}
+"""dict: Item kind -> the lifecycle event emitted once one is stored (D18)."""
+BUILTIN_COMMANDS = ("execute_study", "fit_surrogate")
+"""tuple[str, ...]: The commands every orchestrator has; plugins can't reuse them."""
 MODEL_SPEC_REF = "model_spec_ref"
 """str: The label of a result's JSON input naming the spec it was built from."""
 OVERRIDES = "overrides"
@@ -80,6 +113,25 @@ SOLVE_OUTCOME = "solve_outcome"
 
 class SolveNotOptimal(Exception):  # noqa: N818 (recorded as the run's error type)
     """Recorded as the error of a result run whose solve didn't succeed."""
+
+
+@dataclass
+class StoreItem:
+    """An item about to be stored, as :meth:`Orchestrator.before_store` sees it.
+
+    Attributes:
+        kind: ``"result"``, ``"data"``, ``"model_spec"``, ``"surrogate_spec"``
+            or ``"fit"``.
+        tag: The item's tag (a dataset's name).
+        metadata: Extra run metadata; ``before_store`` may add to it. It can't
+            replace the orchestrator's own keys.
+        run_id: The run, once stored (in ``after_store`` and the events).
+    """
+
+    kind: str
+    tag: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -254,6 +306,12 @@ class Orchestrator:
         allow_delete: Whether :meth:`delete`, :meth:`delete_study` and
             ``replace=True`` may delete anything (D9). A deployment that must
             never lose a stored item turns this off.
+        plugins: Plugins to load (D18): :class:`~flex_orchestrator.ext.Plugin`
+            objects or installed plugin names. Plugins named in
+            ``FLEXORCH_PLUGINS`` load too. Use
+            :func:`~flex_orchestrator.ext.create_orchestrator` to get a
+            plugin's orchestrator subclass.
+        environ: Where ``FLEXORCH_PLUGINS`` is read; ``os.environ`` by default.
 
     Example:
         >>> from flex_orchestrator.backend import MemoryBackend
@@ -277,6 +335,8 @@ class Orchestrator:
         strict_units: bool = False,
         frame: frames.FrameKind = "polars",
         allow_delete: bool = True,
+        plugins: Sequence[Plugin | str] | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         """Set up the orchestrator; see the class docstring for the arguments."""
         self.connection: Connection | None = None
@@ -294,7 +354,7 @@ class Orchestrator:
                 "acquirium_url, db_credentials), not both."
             )
         self.backend = backend
-        self.hooks = DEFAULT_HOOKS.merged(hooks) if hooks else DEFAULT_HOOKS
+        self.hooks = self.build_hooks().merged(hooks) if hooks else self.build_hooks()
         self.registry = registry or HookRegistry()
         self.unit_mapper = unit_mapper or UnitMapper(
             resolver=backend.resolve_unit, strict=strict_units
@@ -309,15 +369,34 @@ class Orchestrator:
         self._locks: dict[str, threading.RLock] = {}
         self._locks_lock = threading.Lock()
         self._call = threading.local()
+        self.events = EventBus()
+        self.commands = CommandRegistry()
+        for builtin in _builtin_commands():
+            self.commands.register(builtin, source="flex-orchestrator")
+        self.plugins = load_plugins(
+            plugins, environ=environ, builtin_commands=BUILTIN_COMMANDS
+        )
+        for plugin in self.plugins:
+            self._load_plugin(plugin)
+        self._closed = False
         if study is not None:
             self.select_study(study)
+        for plugin in self.plugins:
+            if plugin.on_startup is not None:
+                plugin.on_startup(self)
 
     def close(self) -> None:
         """Disconnect from an Acquirium this orchestrator connected to.
 
         A managed server this process started is stopped; its data is kept.
-        A backend that was passed in is left alone.
+        A backend that was passed in is left alone. Plugins' ``on_shutdown``
+        runs first, once.
         """
+        if not self._closed:
+            self._closed = True
+            for plugin in self.plugins:
+                if plugin.on_shutdown is not None:
+                    plugin.on_shutdown(self)
         if self.connection is not None:
             self.connection.close()
 
@@ -377,6 +456,8 @@ class Orchestrator:
         self.backend.define_study(name)
         self._define_ledgers(name)
         self._study = name
+        self.on_study_created(name)
+        self.events.emit("study_created", study=name)
         return name
 
     def select_study(self, name: str) -> str:
@@ -448,9 +529,9 @@ class Orchestrator:
         """Delete a stored item, for good: every run with this kind and tag.
 
         Args:
-            kind: ``"result"``, ``"data"``, ``"model_spec"`` or
-                ``"surrogate_spec"``.
-            tag: The item's tag (a result or spec tag, or a dataset name).
+            kind: ``"result"``, ``"data"``, ``"model_spec"``,
+                ``"surrogate_spec"`` or ``"fit"``.
+            tag: The item's tag (a result, spec or fit tag, or a dataset name).
 
         Returns:
             How many runs were deleted (failed attempts included).
@@ -789,8 +870,20 @@ class Orchestrator:
             raise TypeError("Give the dataset name, or column= to look one up.")
         if column is not None:
             name, columns = self._dataset_with(column), [column]
-        ledger = self._ledger(self.study, LEDGERS[DATA_KIND])
-        run = self._latest(name, DATA_KIND)
+        return self._read_data(self.study, name, columns, start, end, frame)
+
+    def _read_data(
+        self,
+        study: str,
+        name: str,
+        columns: list[str] | None,
+        start: Any,
+        end: Any,
+        frame: frames.FrameKind | None,
+    ) -> Any:
+        """Read a dataset of any study of this store (see :meth:`get_data`)."""
+        ledger = self._ledger(study, LEDGERS[DATA_KIND])
+        run = self._latest(name, DATA_KIND, study)
         timestamps, values = datasets.read(
             self.backend, ledger, run.run_id, name, columns
         )
@@ -869,6 +962,11 @@ class Orchestrator:
         """
         _check_outcome(outcome)
         link = self._spec_link(model, spec, overrides)
+        if keys is None and include is None and exclude is None:
+            selection = self.default_export_selection()
+            keys = selection.get("keys")
+            include = selection.get("include")
+            exclude = selection.get("exclude")
 
         def write() -> StoredResult:
             data = None
@@ -1066,7 +1164,247 @@ class Orchestrator:
         data = results.read_snapshot(found.get(MODEL_VALUES), found[MODEL_MANIFEST])
         return data, found.get(SOLVE_OUTCOME)
 
+    # Commands (D18), studies from config (M4) and fits (D19)
+
+    def run_command(
+        self,
+        name: str,
+        params: Any = None,
+        /,
+        *,
+        progress: Progress | None = None,
+        runtime: Mapping[str, Any] | None = None,
+        **fields: Any,
+    ) -> Any:
+        """Run a command by name, recording the call in ``flexorch::commands``.
+
+        Args:
+            name: The command, e.g. ``"execute_study"`` or a plugin's.
+            params: Its parameters, as a mapping or its params model.
+            progress: Receives progress reports and can cancel the call.
+            runtime: Values JSON can't carry (e.g. a ``build`` callable); not
+                recorded, apart from the import strings of callables.
+            **fields: More parameters, merged over ``params``.
+
+        Returns:
+            What the command returned.
+
+        Raises:
+            CommandError: If there is no such command or the parameters don't
+                validate.
+
+        Example:
+            >>> orch.run_command("fit_surrogate", tag="ro", ...)  # doctest: +SKIP
+        """
+        cmd = self.commands.get(name)
+        validated = cmd.validate(params, **fields)
+        progress = progress or Progress()
+        runtime = {k: v for k, v in (runtime or {}).items() if v is not None}
+        metadata = {
+            **self._metadata(name, COMMAND_KIND),
+            "flexorch_study": self._study,
+            "flexorch_runtime": {
+                key: _hook_name(value) if callable(value) else repr(value)
+                for key, value in runtime.items()
+            }
+            or None,
+        }
+        metadata = {k: v for k, v in metadata.items() if v is not None}
+        status, error = "failed", None
+        try:
+            result = record_call(
+                self.backend,
+                metadata,
+                validated,
+                lambda: cmd.call(self, validated, progress, **runtime),
+            )
+            status = "succeeded"
+            return result
+        except BaseException as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            self.events.emit("command_finished", name=name, status=status, error=error)
+
+    def register_command(self, cmd: Command) -> Command:
+        """Add a command to this orchestrator (a plugin's are added for you).
+
+        Raises:
+            CommandError: If its name is taken.
+        """
+        return self.commands.register(cmd)
+
+    def execute_study(
+        self,
+        config: Any,
+        *,
+        build: Any = None,
+        solve: Any = None,
+        max_workers: int | None = None,
+        dry_run: bool = False,
+        progress: Progress | None = None,
+    ) -> Any:
+        """Run a study from a config: fits, then sweeps of build-solve-store tasks.
+
+        The ``execute_study`` command (M4); see :mod:`flex_orchestrator.study`.
+
+        Args:
+            config: A :class:`~flex_orchestrator.study.StudyConfig`, its dict,
+                or the path of a YAML or JSON file.
+            build: A build hook (callable, import string or registered name)
+                that wins over the config's.
+            solve: A solve hook that wins over the config's.
+            max_workers: Overrides ``execution.max_workers``.
+            dry_run: Expand the config and return the planned fits and tasks
+                without storing or solving anything.
+            progress: Receives a report after each fit and task.
+
+        Returns:
+            A :class:`~flex_orchestrator.study.StudyRun`.
+
+        Raises:
+            StudyConfigError: If the config is invalid.
+            TagExistsError: With ``on_existing: error``, if a task's tag is
+                already stored (checked before anything runs).
+        """
+        from flex_orchestrator.study.config import load_config
+
+        params = {"config": load_config(config), "dry_run": dry_run}
+        if max_workers is not None:
+            params["max_workers"] = max_workers
+        return self.run_command(
+            "execute_study",
+            params,
+            progress=progress,
+            runtime={"build": build, "solve": solve},
+        )
+
+    def fit_surrogate(self, *, progress: Progress | None = None, **params: Any) -> Any:
+        """Fit surrogates from stored data and store them (the D19 command).
+
+        See :class:`~flex_orchestrator.fitting.FitParams` for the parameters:
+        ``tag``, ``regressor``, ``X``, ``y`` and optionally ``variants``,
+        ``window``, ``prep``, ``validation``, ``params``, ``spec_options`` and
+        ``on_existing``.
+
+        Returns:
+            A :class:`~flex_orchestrator.fitting.FitSummary`.
+
+        Example:
+            >>> orch.fit_surrogate(  # doctest: +SKIP
+            ...     tag="ro_linear", regressor="multilinear",
+            ...     X={"dataset": "ro", "columns": ["permeate"]},
+            ...     y={"dataset": "ro", "columns": ["power_electrical"]},
+            ... )
+        """
+        return self.run_command("fit_surrogate", params, progress=progress)
+
+    # Study export and import (D17)
+
+    def export_study(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        parts: Iterable[str] = ("specs", "data", "fits", "results"),
+        tags: Iterable[str] | None = None,
+        compress: bool = False,
+        overwrite: bool = False,
+    ) -> Any:
+        """Export the selected study to a folder of JSON files (D17).
+
+        See :func:`flex_orchestrator.archive.export_study`.
+        """
+        from flex_orchestrator.archive import export_study
+
+        return export_study(
+            self, path, parts=parts, tags=tags, compress=compress, overwrite=overwrite
+        )
+
+    def export_result(self, tag: str, path: str | os.PathLike[str]) -> Any:
+        """Export one stored result to a JSON file (D17).
+
+        See :func:`flex_orchestrator.archive.export_result`.
+        """
+        from flex_orchestrator.archive import export_result
+
+        return export_result(self, tag, path)
+
+    def import_study(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        name: str | None = None,
+        on_existing: Literal["error", "skip"] = "error",
+    ) -> Any:
+        """Re-create an exported study in this store, and select it (D17).
+
+        See :func:`flex_orchestrator.archive.import_study`.
+        """
+        from flex_orchestrator.archive import import_study
+
+        return import_study(self, path, name=name, on_existing=on_existing)
+
+    # Extension points (D18): stable to override in a subclass
+
+    def build_hooks(self) -> HookSet:
+        """Return the default hooks; the hooks given to ``__init__`` win over them.
+
+        Override to change the defaults for every orchestrator of a subclass.
+        """
+        return DEFAULT_HOOKS
+
+    def default_export_selection(self) -> dict[str, Any]:
+        """Return the export selection used when a store names none.
+
+        ``{"keys": [...], "include": [...], "exclude": [...]}``, any of them;
+        ``{}`` (the default) exports everything.
+        """
+        return {}
+
+    def before_store(self, item: StoreItem) -> None:
+        """Called before an item is stored; raise to refuse it.
+
+        Add to ``item.metadata`` to store more run metadata.
+        """
+
+    def after_store(self, item: StoreItem) -> None:
+        """Called after an item is stored, with ``item.run_id`` set."""
+
+    def on_task_result(self, result: Any) -> None:
+        """Called with each task's ``TaskResult`` as a study runs."""
+
+    def on_study_created(self, study: str) -> None:
+        """Called after :meth:`create_study` creates a study."""
+
+    def on(self, event: str, fn: Callable[..., Any] | None = None) -> Any:
+        """Register a listener for a lifecycle event; a decorator without ``fn``.
+
+        See :mod:`flex_orchestrator.ext.events` for the events.
+
+        Example:
+            >>> @orch.on("result_stored")  # doctest: +SKIP
+            ... def log(item):
+            ...     print(item.tag)
+        """
+        return self.events.on(event, fn)
+
     # Internals
+
+    def _load_plugin(self, plugin: Plugin) -> None:
+        for cmd in plugin.commands:
+            self.commands.register(cmd, source=f"plugin {plugin.name!r}")
+        for name, refs in hook_sets(plugin).items():
+            self.registry.register(name, **refs)
+        for event, listener in listeners(plugin):
+            self.events.on(event, listener)
+        cls = plugin.orchestrator_cls
+        if cls is not None and not isinstance(self, cls):
+            warnings.warn(
+                f"Plugin {plugin.name!r} provides {cls.__name__}, but this is a "
+                f"{type(self).__name__}; build it with "
+                "flex_orchestrator.ext.create_orchestrator() to use the subclass.",
+                stacklevel=3,
+            )
 
     def _store(
         self,
@@ -1157,13 +1495,28 @@ class Orchestrator:
     def _guarded(
         self, kind: str, tag: str, replace: bool, write: Callable[[], Any]
     ) -> Any:
-        """Check the tag, write, then settle the tag, holding the study's lock."""
+        """Check the tag, write, then settle the tag, holding the study's lock.
+
+        ``before_store`` sees the item first and may reject it or add metadata;
+        ``after_store`` and the item's lifecycle event follow a stored item.
+        """
+        item = StoreItem(kind, tag, dict(getattr(self._call, "pending", None) or {}))
         with self._lock(self.study):
             self._check_new(tag, kind, replace)
-            stored = write()
-            if stored.run_id is not None and getattr(stored, "ok", True):
+            self.before_store(item)
+            self._call.extra = item.metadata
+            try:
+                stored = write()
+            finally:
+                self._call.extra = None
+            ok = stored.run_id is not None and getattr(stored, "ok", True)
+            if ok:
                 self._settle(kind, tag, stored.run_id, replace)
-            return stored
+        if ok:
+            item.run_id = stored.run_id
+            self.after_store(item)
+            self.events.emit(STORED_EVENTS[kind], item=item)
+        return stored
 
     def _settle(self, kind: str, tag: str, run_id: str, replace: bool) -> None:
         """Leave one live run with this tag, after a write (D9).
@@ -1196,6 +1549,23 @@ class Orchestrator:
                 ledger, [run.run_id for run in before if run.status == "succeeded"]
             )
 
+    @contextmanager
+    def _with_metadata(
+        self, extra: Mapping[str, Any], *, wins: bool = False
+    ) -> Iterator[None]:
+        """Add ``extra`` to the metadata of every item stored in this block.
+
+        With ``wins``, ``extra`` replaces the orchestrator's own keys too (an
+        import keeps a result's original ``flexorch_hooks``).
+        """
+        slot = "forced" if wins else "pending"
+        previous = getattr(self._call, slot, None)
+        setattr(self._call, slot, {**(previous or {}), **extra})
+        try:
+            yield
+        finally:
+            setattr(self._call, slot, previous)
+
     def _check_delete(self, what: str) -> None:
         if not self.allow_delete:
             raise StorageError(
@@ -1209,15 +1579,14 @@ class Orchestrator:
         with lock:
             yield
 
-    def _latest(self, tag: str, kind: str) -> Any:
-        ledger = self._ledger(self.study, LEDGERS[kind])
+    def _latest(self, tag: str, kind: str, study: str | None = None) -> Any:
+        study = study or self.study
+        ledger = self._ledger(study, LEDGERS[kind])
         found = self.backend.runs(
             ledger, status="succeeded", metadata=_tag_metadata(tag, kind)
         )
         if not found:
-            raise TagNotFoundError(
-                f"Study {self.study!r} has no stored {kind} {tag!r}."
-            )
+            raise TagNotFoundError(f"Study {study!r} has no stored {kind} {tag!r}.")
         return found[-1]
 
     def _dataset_with(self, column: str) -> str:
@@ -1266,6 +1635,9 @@ class Orchestrator:
             } or None
         if self.connection is not None:
             metadata["flexorch_connection"] = self.connection.metadata()
+        extra = getattr(self._call, "extra", None) or {}
+        metadata = {**extra, **metadata}  # extras can't replace the orchestrator's
+        metadata.update(getattr(self._call, "forced", None) or {})
         return {k: v for k, v in metadata.items() if v is not None}
 
     def _time_sets(self, model: Any) -> list[Any] | None:
@@ -1306,6 +1678,14 @@ class _SpecLink:
             "spec_hash": self.spec_hash,
             "run_hash": run_hash(self.spec_hash, self.overrides),
         }
+
+
+def _builtin_commands() -> list[Command]:
+    # Imported here: both modules use the orchestrator's constants.
+    from flex_orchestrator.fitting.command import FIT_SURROGATE
+    from flex_orchestrator.study.runner import EXECUTE_STUDY
+
+    return [EXECUTE_STUDY, FIT_SURROGATE]
 
 
 def _ledger_names() -> list[str]:

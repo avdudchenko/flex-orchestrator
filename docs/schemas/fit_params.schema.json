@@ -1,0 +1,552 @@
+{
+  "$defs": {
+    "Prep": {
+      "additionalProperties": false,
+      "description": "How the selected data is prepared before fitting.\n\nAttributes:\n    align: ``inner`` keeps the timestamps every column has; ``outer`` keeps\n        any column's, leaving gaps.\n    resample: Resample to a regular index first.\n    gaps: What to do with missing values: ``error`` (the default),\n        ``drop`` the rows, ``interpolate`` (in time, up to ``limit``\n        missing values in a row), or keep the ``longest_segment`` with\n        none.\n    limit: The longest run of missing values ``interpolate`` fills.\n    max_rows: Refuse more rows than this (a guard against running out of\n        memory).",
+      "properties": {
+        "align": {
+          "default": "inner",
+          "enum": [
+            "inner",
+            "outer"
+          ],
+          "title": "Align",
+          "type": "string"
+        },
+        "gaps": {
+          "default": "error",
+          "enum": [
+            "error",
+            "drop",
+            "interpolate",
+            "longest_segment"
+          ],
+          "title": "Gaps",
+          "type": "string"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "max_rows": {
+          "default": 1000000,
+          "minimum": 1,
+          "title": "Max Rows",
+          "type": "integer"
+        },
+        "resample": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resample"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Prep",
+      "type": "object"
+    },
+    "Resample": {
+      "additionalProperties": false,
+      "description": "Resample to a regular index.\n\nAttributes:\n    freq: A pandas offset alias, e.g. ``\"1h\"``.\n    agg: How values in one bin combine.",
+      "properties": {
+        "agg": {
+          "default": "mean",
+          "enum": [
+            "mean",
+            "sum",
+            "min",
+            "max",
+            "median",
+            "first",
+            "last"
+          ],
+          "title": "Agg",
+          "type": "string"
+        },
+        "freq": {
+          "title": "Freq",
+          "type": "string"
+        }
+      },
+      "required": [
+        "freq"
+      ],
+      "title": "Resample",
+      "type": "object"
+    },
+    "Selector": {
+      "additionalProperties": false,
+      "description": "Where one or more columns of fit data come from.\n\nExactly one source key is set:\n\n- ``dataset`` (with optional ``study`` and ``columns``): a dataset of this\n  study, or of another study in the same store;\n- ``result`` (with ``keys``): exported values of a stored result;\n- ``ref_uris``: streams of the general store, by reference URI;\n- ``resolve``: the one general-store stream whose label matches this text;\n- ``sparql``: a read-only SPARQL ``SELECT`` whose first column is stream\n  references.\n\nAttributes:\n    start: Only rows at or after this time.\n    end: Only rows at or before this time.\n    units: Units to convert to: one for every column, or ``{column: unit}``\n        (after ``rename``). A Pyomo unit (``\"m^3/hr\"``) or a QUDT key\n        (``\"M3-PER-HR\"``).\n    rename: ``{column: new name}``, or ``{\"*\": name}`` for a selector with\n        one column. The surrogate's variable names are the column names,\n        so they must be the unit's variable names.",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Columns"
+        },
+        "dataset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dataset"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        },
+        "keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keys"
+        },
+        "ref_uris": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref Uris"
+        },
+        "rename": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Rename",
+          "type": "object"
+        },
+        "resolve": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolve"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "sparql": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sparql"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "study": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Study"
+        },
+        "units": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Units"
+        }
+      },
+      "title": "Selector",
+      "type": "object"
+    },
+    "Validation": {
+      "additionalProperties": false,
+      "description": "Hold out the end of the data to check the fit on.\n\nAttributes:\n    holdout: How much to hold out from the end, as a pandas offset (``\"7D\"``);\n        the fit uses the rows before it.",
+      "properties": {
+        "holdout": {
+          "title": "Holdout",
+          "type": "string"
+        }
+      },
+      "required": [
+        "holdout"
+      ],
+      "title": "Validation",
+      "type": "object"
+    },
+    "Variant": {
+      "additionalProperties": false,
+      "description": "One fit of a :class:`FitParams` with ``variants``; set fields override the base.\n\nAttributes:\n    name: Rendered into the tag template as ``{name}``.",
+      "properties": {
+        "X": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/Selector"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "X"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Params"
+        },
+        "prep": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "regressor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Regressor"
+        },
+        "spec_options": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spec Options"
+        },
+        "validation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Validation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Window"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/Selector"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Y"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Variant",
+      "type": "object"
+    },
+    "Window": {
+      "additionalProperties": false,
+      "description": "A time window; either end may be open.\n\nAttributes:\n    start: Rows at or after this time (naive means UTC).\n    end: Rows at or before this time.",
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        }
+      },
+      "title": "Window",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The parameters of ``fit_surrogate``.\n\nAttributes:\n    tag: The surrogate spec's tag; a template with ``{name}`` when there\n        are variants (``\"biogas_{name}\"``).\n    regressor: A flex-pse ``SurrogateType`` (``\"multilinear\"``,\n        ``\"constant_intensity\"``) or an import string of a class that\n        follows flex-pse's ``Regressor`` protocol.\n    params: The regressor's constructor arguments.\n    spec_options: Passed to its ``to_surrogate_spec``.\n    X: The inputs: one selector or a list, merged column-wise.\n    y: The output: one selector (or a list) giving one column.\n    window: Only data in this window.\n    prep: How the data is prepared (see :class:`Prep`).\n    validation: Hold-out metrics (see :class:`Validation`).\n    variants: Several fits in one call, each overriding these fields.\n    on_existing: What to do when a tag is stored: ``error``, ``skip`` it,\n        or ``replace`` it.\n    store_series: Also store ``actual`` / ``fitted`` / ``residual``\n        timeseries with the fit, for plotting.\n    max_workers: Variants fitted at once; more than 1 needs Ray (M5).",
+  "properties": {
+    "X": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Selector"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Selector"
+          },
+          "type": "array"
+        }
+      ],
+      "title": "X"
+    },
+    "max_workers": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Max Workers",
+      "type": "integer"
+    },
+    "on_existing": {
+      "default": "error",
+      "enum": [
+        "error",
+        "skip",
+        "replace"
+      ],
+      "title": "On Existing",
+      "type": "string"
+    },
+    "params": {
+      "additionalProperties": true,
+      "title": "Params",
+      "type": "object"
+    },
+    "prep": {
+      "$ref": "#/$defs/Prep"
+    },
+    "regressor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Regressor"
+    },
+    "spec_options": {
+      "additionalProperties": true,
+      "title": "Spec Options",
+      "type": "object"
+    },
+    "store_series": {
+      "default": false,
+      "title": "Store Series",
+      "type": "boolean"
+    },
+    "tag": {
+      "title": "Tag",
+      "type": "string"
+    },
+    "validation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Validation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "variants": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Variant"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Variants"
+    },
+    "window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Window"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "y": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Selector"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Selector"
+          },
+          "type": "array"
+        }
+      ],
+      "title": "Y"
+    }
+  },
+  "required": [
+    "tag",
+    "X",
+    "y"
+  ],
+  "title": "FitParams",
+  "type": "object"
+}

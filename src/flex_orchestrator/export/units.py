@@ -26,6 +26,7 @@ in strict mode.
 
 import itertools
 import math
+import re
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -295,6 +296,93 @@ def conversion_factor(from_unit: str, to_unit: str) -> float:
             "offset unit."
         )
     return float(source.to(target.units).magnitude)
+
+
+_QUDT_PREFIXES = {
+    "Tera": "tera",
+    "Giga": "giga",
+    "Mega": "mega",
+    "Kilo": "kilo",
+    "Hecto": "hecto",
+    "Deca": "deca",
+    "Deci": "deci",
+    "Centi": "centi",
+    "Milli": "milli",
+    "Micro": "micro",
+    "Nano": "nano",
+}
+_QUDT_TERM = re.compile(
+    r"(?P<prefix>" + "|".join(_QUDT_PREFIXES) + r")?(?P<base>[A-Z][A-Z_]*?)(?P<exp>\d*)"
+)
+
+
+def qudt_to_pyomo(key: str) -> str | None:
+    """Return a Pyomo unit string for a QUDT key, by the rule :class:`UnitMapper` uses.
+
+    The reverse of key generation: each ``-``-separated part is a prefix, a
+    base symbol from :data:`BASE_UNITS` (or ``CCY_<code>``) and an exponent,
+    and ``-PER-`` starts the denominator. ``W-HR`` comes back as
+    ``watt*hour``, which is the same unit.
+
+    Args:
+        key: A QUDT key, e.g. ``"M3-PER-HR"``.
+
+    Returns:
+        The unit, e.g. ``"meter**3/hour"``, or ``None`` if a part isn't known
+        or the result doesn't parse.
+
+    Example:
+        >>> qudt_to_pyomo("KiloW-HR-PER-M3")
+        'kilowatt*hour/meter**3'
+    """
+    if key == "UNITLESS":
+        return "dimensionless"
+    names = {}
+    for name, symbol in BASE_UNITS.items():
+        if "-" not in symbol:
+            names.setdefault(symbol, name)
+    numerator, _, denominator = key.partition("-PER-")
+    if key.startswith("PER-"):
+        numerator, denominator = "", key[len("PER-") :]
+
+    def terms(part: str) -> list[str] | None:
+        found = []
+        for token in part.split("-") if part else []:
+            if token.startswith("CCY_"):
+                found.append(token[len("CCY_") :])
+                continue
+            match = _QUDT_TERM.fullmatch(token)
+            if match is None or match["base"] not in names:
+                return None
+            unit = _QUDT_PREFIXES.get(match["prefix"] or "", "") + names[match["base"]]
+            found.append(f"{unit}**{match['exp']}" if match["exp"] else unit)
+        return found
+
+    top, bottom = terms(numerator), terms(denominator)
+    if top is None or bottom is None:
+        return None
+    text = "*".join(top) or "1"
+    if bottom:
+        text += "/" + ("/".join(bottom))
+    return text if _parse(text) is not None else None
+
+
+def pyomo_unit_of(text: str | None) -> str | None:
+    """Return a Pyomo unit string for a unit written as Pyomo/pint text or a QUDT key.
+
+    Example:
+        >>> pyomo_unit_of("m^3/hr"), pyomo_unit_of("M3-PER-HR")
+        ('m^3/hr', 'meter**3/hour')
+    """
+    if text is None:
+        return None
+    if not _QUDT_KEY.fullmatch(text) and _parse(text) is not None:
+        return text
+    return qudt_to_pyomo(text) or (text if _parse(text) is not None else None)
+
+
+# A QUDT key: upper-case symbols and digits joined by '-', with prefixes.
+_QUDT_KEY = re.compile(r"(?:[A-Z][A-Za-z_]*\d*)(?:-[A-Z][A-Za-z_]*\d*)*")
 
 
 def _parse(unit: str) -> Any:

@@ -1,0 +1,18 @@
+[build-system]
+# setuptools, so the plugin builds offline with --no-build-isolation (the
+# integration test installs it that way); any backend works for a plugin.
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ro-tools"
+version = "0.1.0"
+description = "A sample flex-orchestrator plugin: a cost table command and an orchestrator subclass"
+requires-python = ">=3.12"
+dependencies = ["flex-orchestrator"]
+
+[project.entry-points."flex_orchestrator.plugins"]
+ro_tools = "ro_tools:plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]

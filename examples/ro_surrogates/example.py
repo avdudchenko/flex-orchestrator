@@ -38,25 +38,17 @@ def sec(permeate):
     return 2.5 + 4e-4 * (permeate - 90) ** 2
 
 
-if __name__ == "__main__":
-    orch = Orchestrator(data_dir=HERE / ".flexorch")
-    if "ro_surrogates" in orch.studies():
-        orch.delete_study("ro_surrogates")
-    orch.create_study("ro_surrogates")
-
-    # 1. A month of hourly RO data: power = sec(permeate) * permeate, plus noise.
+def operating_data():
+    """A month of hourly RO data: power = sec(permeate) * permeate, plus noise."""
     rng = np.random.default_rng(0)
     time = pd.date_range("2025-06-01", periods=30 * 24, freq="h", tz="UTC")
     permeate = rng.uniform(30, 150, len(time))
     power = sec(permeate) * permeate * rng.normal(1, 0.02, len(time))
-    plant_data = pd.DataFrame({"permeate": permeate, "power_electrical": power}, time)
-    orch.store_data(
-        "ro_operation",
-        plant_data,
-        units={"permeate": "m^3/hr", "power_electrical": "kW"},
-    )
+    return pd.DataFrame({"permeate": permeate, "power_electrical": power}, time)
 
-    # 2. The model, built in Python and priced by the tariff file.
+
+def ro_model():
+    """The model, built in Python and priced by the tariff file."""
     m = pyo.ConcreteModel(name="ro_plant")
     m.time_block = fo.TimeBlock(
         start_date="2025-07-08", end_date="2025-07-10", time_step=1 * u.hr
@@ -93,8 +85,26 @@ if __name__ == "__main__":
     pyo.TransformationFactory("network.expand_arcs").apply_to(m)
     m.costing.cost_process()
     m.objective = pyo.Objective(expr=m.costing.aggregate_operating_cost)
+    return m
 
-    orch.store_model_spec("base", fo.emit_model(m, relative_to=HERE), base_dir=HERE)
+
+if __name__ == "__main__":
+    orch = Orchestrator(data_dir=HERE / ".flexorch")
+    if "ro_surrogates" in orch.studies():
+        orch.delete_study("ro_surrogates")
+    orch.create_study("ro_surrogates")
+
+    # 1. The synthetic plant data.
+    orch.store_data(
+        "ro_operation",
+        operating_data(),
+        units={"permeate": "m^3/hr", "power_electrical": "kW"},
+    )
+
+    # 2. The model's spec, emitted by flex-pse.
+    orch.store_model_spec(
+        "base", fo.emit_model(ro_model(), relative_to=HERE), base_dir=HERE
+    )
 
     # 3. Two fits from the stored data: the average intensity, and power as a
     # linear function of permeate flow.

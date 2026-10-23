@@ -16,13 +16,22 @@ forbidden_modules =
     starlette
 
 [importlinter:contract:format-agnostic-core]
-name = hooks, specs, errors and testing don't import pyomo, flex-pse or Acquirium
+name = hooks, specs, errors, testing and the config models don't import pyomo, flex-pse or Acquirium
 type = forbidden
+# The plugin-test helpers build an orchestrator only when called; the fake
+# hooks and specs stay importable without pyomo.
+ignore_imports =
+    flex_orchestrator.testing.orchestrators -> flex_orchestrator.backend
+    flex_orchestrator.testing.orchestrators -> flex_orchestrator.ext
 source_modules =
     flex_orchestrator.hooks
     flex_orchestrator.specs
     flex_orchestrator.errors
     flex_orchestrator.testing
+    flex_orchestrator.study.config
+    flex_orchestrator.fitting.models
+    flex_orchestrator.ext.commands
+    flex_orchestrator.ext.events
 forbidden_modules =
     pyomo
     flexcore
@@ -53,6 +62,11 @@ source_modules =
     flex_orchestrator.results
     flex_orchestrator.backend.base
     flex_orchestrator.backend.memory
+    flex_orchestrator.ext
+    flex_orchestrator.fitting
+    flex_orchestrator.study
+    flex_orchestrator.archive
+    flex_orchestrator.cli
 forbidden_modules =
     acquirium
     requests

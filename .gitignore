@@ -13,3 +13,4 @@ docs/_build/
 .env
 .claude/
 .flexorch/
+examples/ro_study/export/
