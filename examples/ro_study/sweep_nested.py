@@ -38,16 +38,17 @@ STUDY = {
 }
 
 if __name__ == "__main__":
-    orch = new_study("ro_nested_sweep")
-    orch.execute_study(STUDY)
-    report(orch)
+    with new_study("ro_nested_sweep") as orch:
+        orch.execute_study(STUDY)
+        report(orch)
 
-    folder = HERE / "export" / "ro_nested_sweep"
-    exported = orch.export_study(folder, overwrite=True)
-    print(f"Exported to {folder}: {exported.counts}")
-    for result in orch.stored_model_results():
-        stored = {s.key: s for s in result.data()}
-        on_disk = load_result(folder / "results" / f"{result.tag}.json")
-        assert {s.key: s for s in on_disk.data()} == stored
-        print(f"{result.tag}: all {len(stored)} values read back from disk unchanged")
-    orch.close()
+        folder = HERE / "export" / "ro_nested_sweep"
+        exported = orch.export_study(folder, overwrite=True)
+        print(f"Exported to {folder}: {exported.counts}")
+        for result in orch.stored_model_results():
+            stored = {s.key: s for s in result.data()}
+            on_disk = load_result(folder / "results" / f"{result.tag}.json")
+            assert {s.key: s for s in on_disk.data()} == stored
+            print(
+                f"{result.tag}: all {len(stored)} values read back from disk unchanged"
+            )

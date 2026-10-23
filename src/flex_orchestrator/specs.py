@@ -173,6 +173,13 @@ def record_hash(spec: Any, assets: Mapping[str, AssetRef] | None = None) -> str:
     it also covers each file's sha256, so editing a referenced file (a tariff,
     say) changes the hash even though the spec text doesn't (D2).
 
+    Args:
+        spec: The stored spec JSON.
+        assets: ``{JSON pointer: AssetRef}`` for each file it references.
+
+    Returns:
+        The hex sha256.
+
     Example:
         >>> record_hash({"a": 1}) == spec_hash({"a": 1})
         True
@@ -191,6 +198,15 @@ def normalise_spec(
     kind: SpecKind, spec: Any, spec_format: str | None = None, validate: bool = True
 ) -> tuple[dict[str, Any], str]:
     """Return a spec as stored JSON and its format, validated when possible.
+
+    Args:
+        kind: What the spec describes: ``"model_spec"`` or ``"surrogate_spec"``.
+        spec: A mapping or pydantic model.
+        spec_format: Its format; detected from the spec when omitted.
+        validate: Run the format's validator, when its library is installed.
+
+    Returns:
+        ``(the stored JSON, the format)``.
 
     Raises:
         SpecError: If the spec isn't JSON, its format belongs to the other

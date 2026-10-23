@@ -27,10 +27,12 @@ import fnmatch
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 import polars as pl
 
+from flex_orchestrator import frames
 from flex_orchestrator.backend.base import StorageBackend, Variable, to_rows, to_utc
 from flex_orchestrator.errors import ExportError, StorageError, UnitError
 from flex_orchestrator.export.model_data import ExportedSeries, ModelData
@@ -41,7 +43,7 @@ MODEL_VALUES = "model_values"
 MODEL_MANIFEST = "model_manifest"
 """str: The label of a result's JSON manifest."""
 SNAPSHOT_SCHEMA = "flexorch-model/1"
-TIME = "time"
+TIME = frames.TIME
 """str: The time column of ``model_values``."""
 
 
@@ -61,22 +63,7 @@ def snapshot(data: ModelData) -> tuple[pl.DataFrame | None, dict[str, Any]]:
     Raises:
         StorageError: If a timeseries has no datetimes, or a key is ``time``.
     """
-    # A model's series share a few time axes (the main one, startup's t >= 1),
-    # so each distinct axis is converted and placed once, not once per key.
-    axes: dict[tuple, list] = {}
-    axis_of = {}
-    for series in data.timeseries():
-        axis = tuple(series.timestamps or ())
-        if axis not in axes:
-            axes[axis] = _stamps(series)
-        axis_of[series.key] = axis
-    times = sorted({when for found in axes.values() for when in found})
-    position = {when: i for i, when in enumerate(times)}
-    # None: the axis is every row of the table.
-    rows_of = {
-        axis: None if found == times else [position[when] for when in found]
-        for axis, found in axes.items()
-    }
+    times, rows_of = layout(data)
     columns: dict[str, list[float | None]] = {}
     entries = []
     for series in data:
@@ -92,15 +79,10 @@ def snapshot(data: ModelData) -> tuple[pl.DataFrame | None, dict[str, Any]]:
         if series.kind == "scalar":
             entry["value"] = series.values[0]
         else:
-            rows = rows_of[axis_of[series.key]]
-            if rows is None:
-                columns[series.key] = list(series.values)
-            else:
+            rows = rows_of[series.key]
+            if rows is not None:
                 entry["rows"] = rows
-                column: list[float | None] = [None] * len(times)
-                for row, value in zip(rows, series.values, strict=True):
-                    column[row] = value
-                columns[series.key] = column
+            columns[series.key] = spread(rows, series.values, len(times))
         entries.append(entry)
     table = None
     if columns:
@@ -109,6 +91,55 @@ def snapshot(data: ModelData) -> tuple[pl.DataFrame | None, dict[str, Any]]:
             + [pl.Series(key, v, dtype=pl.Float64) for key, v in columns.items()]
         )
     return table, {"schema": SNAPSHOT_SCHEMA, "series": entries}
+
+
+def layout(data: ModelData) -> tuple[list[datetime], dict[str, list[int] | None]]:
+    """Place every timeseries on one sorted UTC time axis.
+
+    Args:
+        data: The exported values.
+
+    Returns:
+        ``(times, rows)``: the union of the timestamps, sorted, and for each
+        timeseries key the positions in ``times`` it has values at, or
+        ``None`` when it has one at every position.
+
+    Raises:
+        StorageError: If a timeseries has no datetimes, or a key is ``time``.
+    """
+    # A model's series share a few time axes (the main one, startup's t >= 1),
+    # so each distinct axis is converted and placed once, not once per key.
+    axes: dict[tuple, list] = {}
+    axis_of = {}
+    for series in data.timeseries():
+        _check_key(series)
+        axis = tuple(series.timestamps or ())
+        if axis not in axes:
+            axes[axis] = _stamps(series)
+        axis_of[series.key] = axis
+    times = sorted({when for found in axes.values() for when in found})
+    position = {when: i for i, when in enumerate(times)}
+    rows_of = {
+        axis: None if found == times else [position[when] for when in found]
+        for axis, found in axes.items()
+    }
+    return times, {key: rows_of[axis] for key, axis in axis_of.items()}
+
+
+def spread(
+    rows: list[int] | None, values: Sequence[float | None], size: int
+) -> list[float | None]:
+    """Return ``size`` values: ``values`` at ``rows``, ``None`` elsewhere.
+
+    ``rows`` is ``None`` when ``values`` already has one per position (see
+    :func:`layout`).
+    """
+    if rows is None:
+        return list(values)
+    column: list[float | None] = [None] * size
+    for row, value in zip(rows, values, strict=True):
+        column[row] = value
+    return column
 
 
 def read_snapshot(table: pl.DataFrame | None, manifest: Mapping[str, Any]) -> ModelData:
@@ -183,13 +214,48 @@ def convert(data: ModelData, units: Mapping[str, str]) -> ModelData:
         converted.append(
             replace(
                 series,
-                values=[None if v is None else v * factor for v in series.values],
+                values=_scale(series.values, factor),
                 unit_pyomo=target,
                 unit_qudt=None,
                 unit_verified=False,
             )
         )
     return ModelData(converted)
+
+
+class ResultReads:
+    """The read methods a stored or loaded result shares.
+
+    A subclass provides ``data(units)`` and ``to_frame(frame, units)``; this
+    adds the conveniences on top of them.
+    """
+
+    def data(self, units: Mapping[str, str] | None = None) -> ModelData:
+        """Return the values, converted to ``units`` if given."""
+        raise NotImplementedError
+
+    def to_frame(
+        self, frame: Any = None, units: Mapping[str, str] | None = None
+    ) -> Any:
+        """Return the timeseries as one table, a column per key."""
+        raise NotImplementedError
+
+    def to_polars(self, units: Mapping[str, str] | None = None) -> Any:
+        """Return :meth:`to_frame` as a polars DataFrame."""
+        return self.to_frame("polars", units)
+
+    def to_pandas(self, units: Mapping[str, str] | None = None) -> Any:
+        """Return :meth:`to_frame` as a pandas DataFrame."""
+        return self.to_frame("pandas", units)
+
+    def scalars(self, units: Mapping[str, str] | None = None) -> dict[str, Any]:
+        """Return ``{key: value}`` for every scalar."""
+        return {s.key: s.value for s in self.data(units).scalars()}
+
+    @property
+    def units(self) -> dict[str, str | None]:
+        """``{key: Pyomo unit}`` for every stored key."""
+        return {s.key: s.unit_pyomo for s in self.data()}
 
 
 def select(data: ModelData, patterns: Iterable[str]) -> ModelData:
@@ -259,10 +325,9 @@ def plan_writes(backend: StorageBackend, study: str, data: ModelData) -> list[_W
                     f"{study!r}, but this model exports it as a {series.kind}."
                 )
             factor = _factor(series, declared.metadata.get("pyomo_unit"))
-        values = [None if v is None else v * factor for v in series.values]
+        values = _scale(series.values, factor)
         if series.kind == "timeseries":
-            _stamps(series)
-            value: Any = to_rows(series.timestamps, values)
+            value: Any = to_rows(_stamps(series), values)
         else:
             value = values[0]
         writes.append(_Write(series, declared, value))
@@ -309,9 +374,17 @@ def _factor(series: ExportedSeries, declared_unit: str | None) -> float:
         raise UnitError(f"{series.key!r}: {exc}") from None
 
 
-def _stamps(series: ExportedSeries) -> list:
+def _check_key(series: ExportedSeries) -> None:
     if series.key == TIME:
         raise StorageError(f"A key can't be named {TIME!r}; it is the time column.")
+
+
+def _scale(values: Sequence[float | None], factor: float) -> list[float | None]:
+    return [None if v is None else v * factor for v in values]
+
+
+def _stamps(series: ExportedSeries) -> list:
+    _check_key(series)
     try:
         return [to_utc(when) for when in series.timestamps or []]
     except StorageError:

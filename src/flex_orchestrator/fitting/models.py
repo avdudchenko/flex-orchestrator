@@ -16,6 +16,8 @@ SOURCES = ("dataset", "result", "ref_uris", "resolve", "sparql")
 
 
 class _Strict(BaseModel):
+    """A config model that rejects unknown fields (a typo is an error)."""
+
     model_config = ConfigDict(extra="forbid")
 
 
@@ -144,6 +146,8 @@ class Variant(_Strict):
 
     Attributes:
         name: Rendered into the tag template as ``{name}``.
+
+    The other fields are those of :class:`FitParams`; ``None`` keeps the base's.
     """
 
     name: str
@@ -240,7 +244,14 @@ def _render(template: str, name: str | None) -> str:
 
 
 class FitPlan(_Strict):
-    """One fit, with its variant applied: what a fit run records as its parameters."""
+    """One fit, with its variant applied: what a fit run records as its parameters.
+
+    Attributes:
+        tag: The surrogate spec's tag, rendered.
+        name: The variant's name, if it came from one.
+
+    The other fields are those of :class:`FitParams`, with the variant's set.
+    """
 
     tag: str
     name: str | None = None

@@ -5,6 +5,43 @@
 ### Fixed
 - The flex-pse spec validators dump with `by_alias=True`, so a `$source`
   reference is stored as `{"$source": ...}`, not `{"source": ...}`.
+- A study run in-process (`max_workers: 1`) whose config names registered
+  hooks no longer fails every task with "No hooks are registered".
+- Cancelling `execute_study` now also cancels the fits it runs first.
+- `create_orchestrator` (and so `flex-orch run`) honours
+  `FLEXORCH_RAY_ADDRESS`.
+- With `on_error: stop`, two tasks timing out at once no longer raise
+  `KeyError`.
+- A model key named `time` is refused wherever it appears, not only when it
+  is the first key on its time axis.
+- A numeric pandas `time_column` raises `StorageError` instead of being read
+  as nanoseconds since 1970.
+- Deleting the same run id twice in one call deletes it once (both backends).
+- Acquirium `has_study` turns connection errors into `StorageError`; `runs()`
+  sorts a run with no start time last.
+- A `constant_intensity` surrogate with the wrong number of coefficients
+  raises `FitError`.
+- An export's final folder rename retries briefly on a Windows
+  `PermissionError` (a just-written file held by antivirus or the indexer).
+
+### Changed
+- `retries` now covers only the model work (build, solve, export, or a dead
+  Ray worker) on both paths. A task whose spec can't be prepared or whose
+  result can't be stored is an error result at once; in-process this used
+  to be retried.
+- `fit_surrogate` on Ray finds Ray the same way studies do: the call's
+  address, then the fit's, then `Orchestrator(ray_address=)` /
+  `FLEXORCH_RAY_ADDRESS`, then local Ray.
+- An unknown registered hook name in a study config raises `HookError`
+  before the study runs, on both paths.
+- Code review: shared helpers replace duplicated code
+  (`backend.recording`, `SolveOutcome.from_stored`, `results.ResultReads`,
+  `results.layout`, `backend.base.align` / `qudt_key`, task error results),
+  and docstrings were filled in or corrected across the package.
+- The package root also exports `ConfigureFn`, `StudyConfigError`,
+  `FitError`, `CommandError`, `CommandCancelled`, `PluginError` and
+  `ArchiveError`.
+- A root `README.md`.
 
 ### Added
 - Parallel execution on Ray (PLAN.md D13, M5). With `max_workers > 1`,

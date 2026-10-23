@@ -84,8 +84,8 @@ class MemoryBackend:
         """Declare a variable, or return it if declared the same way.
 
         Raises:
-            StorageError: If ``label`` is declared differently, or a JSON or
-                table variable is given a unit.
+            StorageError: If ``label`` is declared differently, or a JSON,
+                table or file variable is given a unit.
         """
         if kind in ("json", "table", "file") and unit is not None:
             raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
@@ -179,7 +179,7 @@ class MemoryBackend:
                 raise StorageError(f"Study {study!r} has no run {run_id!r}.")
             if entry.run.status == "running":
                 raise StorageError(f"Run {run_id!r} is still running.")
-        for run_id in run_ids:
+        for run_id in dict.fromkeys(run_ids):
             del self._runs[run_id]
 
     def delete_study(self, name: str) -> None:

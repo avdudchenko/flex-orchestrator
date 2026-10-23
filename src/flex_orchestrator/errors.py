@@ -20,11 +20,14 @@ class HookError(FlexOrchestratorError):
 
 
 class SpecError(FlexOrchestratorError):
-    """A model spec, override or surrogate target doesn't match the model.
+    """A spec, its tag or assets, or a path into it is invalid.
 
-    Raised for an override path that names no component (or one that can't be
-    set), and for a surrogate swap aimed at a unit the spec or model doesn't
-    have.
+    Raised for a spec that isn't a JSON object or fails its format's
+    validation, a spec stored as the wrong kind, an invalid tag, a stored spec
+    whose hash doesn't match, a configuration-option path or asset pointer
+    that doesn't resolve, and a surrogate aimed at a unit the spec doesn't
+    have. (A bad override path in the default build raises flex-pse's own
+    error.)
     """
 
 

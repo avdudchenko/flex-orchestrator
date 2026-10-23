@@ -249,7 +249,7 @@ def test_delete_runs(backend, study):
     assert len(backend.runs(study)) == 3
     with pytest.raises(StorageError):
         backend.delete_runs(study, ["00000000-0000-0000-0000-000000000000"])
-    backend.delete_runs(study, [gone])
+    backend.delete_runs(study, [gone, gone])  # a repeated id is deleted once
     assert [r.run_id for r in backend.runs(study)] == [kept, running]
     backend.delete_runs(study, [])
     backend.finish_run(running)

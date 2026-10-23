@@ -34,6 +34,7 @@ again on each run. Its output ends with:
 ```
 average intensity: 2.976 kWh/m^3
 linear surrogate: power = 3.417 * permeate -40.0 kW
+Comparing estimated vs real power use due to surrogate simplifications
 fixed_intensity: $1,285.96, RO energy 10,355 kWh (true 8,725 kWh)
 linear_surrogate: $1,238.92, RO energy 9,970 kWh (true 8,988 kWh)
 ```

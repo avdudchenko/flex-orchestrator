@@ -10,6 +10,7 @@ the fits themselves run on Ray (D13, D19); loading and storing stay here.
 import json
 from typing import Any
 
+from flex_orchestrator.errors import TagNotFoundError
 from flex_orchestrator.ext.commands import Progress, command
 from flex_orchestrator.fitting import prep as preparation
 from flex_orchestrator.fitting import regress, selectors, store
@@ -39,7 +40,9 @@ def run_fits(
 
     With more than one worker the variants are fitted on Ray: the data is
     loaded and prepared here, once per selection, and sent to the workers
-    once (``ray.put``); this process stores every fit.
+    once (``ray.put``); this process stores every fit. Ray is the one at the
+    study's address, else ``params.ray_address``, else the orchestrator's
+    (``Orchestrator(ray_address=)`` or ``FLEXORCH_RAY_ADDRESS``), else local.
 
     Args:
         orch: The orchestrator.
@@ -69,7 +72,12 @@ def run_fits(
     cache: dict[str, preparation.Prepared] = {}
     data = {plan.tag: _prepared(orch, plan, cache) for plan in todo}
     if workers > 1 and len(todo) > 1:
-        computed = _on_ray(todo, data, workers, execution, progress, params.ray_address)
+        address = (
+            (execution and execution.ray_address)
+            or params.ray_address
+            or orch.ray_address
+        )
+        computed = _on_ray(todo, data, workers, execution, progress, address)
     else:
         computed = {}
     records = []
@@ -85,7 +93,11 @@ def run_fits(
 
 
 def _stored(orch: Any, tag: str) -> bool:
-    return any(s.tag == tag for s in orch.stored_specs(SURROGATE_SPEC))
+    try:
+        orch._latest(tag, SURROGATE_SPEC)
+    except TagNotFoundError:
+        return False
+    return True
 
 
 def _prepared(
@@ -111,29 +123,28 @@ def _on_ray(
     progress: Progress,
     ray_address: str | None,
 ) -> dict[str, dict[str, Any]]:
-    """Fit ``plans`` on Ray; each prepared dataset is sent once."""
+    """Fit ``plans`` on Ray at ``ray_address``; each prepared dataset is sent once."""
     from flex_orchestrator.parallel import connect, map_ordered
 
-    address = getattr(execution, "ray_address", None) or ray_address
-    ray = connect(address)
+    ray = connect(ray_address)
     shared: dict[int, Any] = {}
     for plan in plans:
         prepared = data[plan.tag]
         if id(prepared) not in shared:
             shared[id(prepared)] = ray.put(prepared)
-    resources = getattr(execution, "resources", None)
-    options = (
-        {"num_cpus": resources.num_cpus, "memory": resources.memory}
-        if (resources is not None)
-        else {}
-    )
+    options: dict[str, Any] = {}
+    if execution is not None:
+        options = {
+            "num_cpus": execution.resources.num_cpus,
+            "memory": execution.resources.memory,
+            "max_calls": execution.max_calls,
+        }
     results = map_ordered(
         _compute,
         [(plan, shared[id(data[plan.tag])]) for plan in plans],
         workers=workers,
-        ray_address=address,
+        ray_address=ray_address,
         progress=progress,
-        max_calls=getattr(execution, "max_calls", None),
         **options,
     )
     return {plan.tag: result for plan, result in zip(plans, results, strict=True)}

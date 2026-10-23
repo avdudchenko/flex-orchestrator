@@ -13,7 +13,7 @@ from typing import Any, Literal
 import pandas as pd
 import polars as pl
 
-from flex_orchestrator.backend.base import to_utc
+from flex_orchestrator.backend.base import align, to_utc
 from flex_orchestrator.errors import StorageError
 
 FrameKind = Literal["polars", "pandas"]
@@ -33,6 +33,17 @@ def frame_kind(df: Any) -> FrameKind:
     if isinstance(df, pd.DataFrame):
         return "pandas"
     raise TypeError(f"Expected a polars or pandas DataFrame, not {type(df).__name__}.")
+
+
+def check_frame(frame: Any) -> FrameKind:
+    """Return ``frame`` if it names a frame kind.
+
+    Raises:
+        ValueError: If ``frame`` isn't ``"polars"`` or ``"pandas"``.
+    """
+    if frame not in FRAME_KINDS:
+        raise ValueError(f"frame must be one of {FRAME_KINDS}, not {frame!r}.")
+    return frame
 
 
 def to_columns(
@@ -75,10 +86,17 @@ def from_columns(
     polars gets a ``time`` column of UTC datetimes first; pandas gets a UTC
     ``DatetimeIndex`` named ``time``. Missing values are null (polars) or NaN
     (pandas).
+
+    Args:
+        timestamps: The UTC timestamps, one per row.
+        columns: ``{column: values}``, a value per timestamp (``None`` if
+            missing).
+        frame: ``"polars"`` or ``"pandas"``.
+
+    Raises:
+        ValueError: If ``frame`` isn't ``"polars"`` or ``"pandas"``.
     """
-    if frame not in FRAME_KINDS:
-        raise ValueError(f"frame must be one of {FRAME_KINDS}, not {frame!r}.")
-    if frame == "polars":
+    if check_frame(frame) == "polars":
         data = {TIME: pl.Series(TIME, list(timestamps), dtype=pl.Datetime("us", "UTC"))}
         data.update(
             {
@@ -106,6 +124,9 @@ def _pandas_columns(df: Any, time_column: str | None) -> tuple[list, dict]:
         times, values = df.index, df
     else:
         _need(time_column, df.columns)
+        if pd.api.types.is_numeric_dtype(df[time_column]):
+            # pandas would read numbers as nanoseconds since 1970.
+            raise StorageError(f"Time column {time_column!r} isn't a datetime column.")
         times = pd.DatetimeIndex(df[time_column])
         values = df.drop(columns=[time_column])
     return list(times), {str(name): values[name].tolist() for name in values.columns}
@@ -163,17 +184,9 @@ def model_frame(data: Any, frame: FrameKind) -> Any:
         data: The values, with datetime timestamps.
         frame: ``"polars"`` or ``"pandas"``.
     """
-    series = data.timeseries()
     by_key = {
         s.key: dict(zip([to_utc(t) for t in s.timestamps], s.values, strict=True))
-        for s in series
+        for s in data.timeseries()
     }
-    timestamps = sorted({when for values in by_key.values() for when in values})
-    return from_columns(
-        timestamps,
-        {
-            key: [values.get(when) for when in timestamps]
-            for key, values in by_key.items()
-        },
-        frame,
-    )
+    timestamps, columns = align(by_key, list(by_key))
+    return from_columns(timestamps, columns, frame)

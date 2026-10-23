@@ -58,6 +58,7 @@ def test_polars_finds_its_one_datetime_column():
         (pl.DataFrame({"a": STAMPS, "b": STAMPS}), None, "found 2"),
         (pl.DataFrame({"a": STAMPS, "x": [1, 2, 3]}), "x", "isn't a datetime"),
         (pl.DataFrame({"a": STAMPS}), "nope", "no column 'nope'"),
+        (pd.DataFrame({"t": [1, 2, 3], "x": [1.0, 2.0, 3.0]}), "t", "isn't a datetime"),
         (pd.DataFrame({"x": ["a", "b", "c"]}, index=STAMPS), None, "isn't numeric"),
         (pd.DataFrame({"x": [True, False, True]}, index=STAMPS), None, "isn't numeric"),
         (pd.DataFrame({"x": [1.0, float("inf"), 2.0]}, index=STAMPS), None, "infinite"),
@@ -93,3 +94,8 @@ def test_from_columns_rejects_other_kinds():
 def test_round_trip_through_columns():
     df = pl.DataFrame({"time": UTC_STAMPS, "x": [1.0, 2.0, 3.0]})
     assert from_columns(*to_columns(df), "polars").equals(df)
+
+
+def test_a_pandas_time_column_of_strings_is_still_parsed():
+    df = pd.DataFrame({"t": ["2025-07-08 00:00", "2025-07-08 01:00"], "x": [1, 2]})
+    assert len(to_columns(df, time_column="t")[0]) == 2

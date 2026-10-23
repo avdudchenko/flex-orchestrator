@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 from pyomo.environ import units as pyunits
 
+from flex_orchestrator.backend.base import qudt_key
 from flex_orchestrator.errors import UnitError
 
 BASE_UNITS: dict[str, str] = {
@@ -232,13 +233,13 @@ class UnitMapper:
             return None
         quantity = registry.Quantity(1, base)
         for identifier in dict.fromkeys((registry.get_symbol(base), base)):
-            found = self._resolve(identifier)
+            found = self.resolve(identifier)
             if found is not None and _same_multiplier(found, quantity):
                 return local_name(found)
         return None
 
     def _confirms(self, key: str, quantity: Any) -> bool:
-        found = self._resolve(key)
+        found = self.resolve(key)
         if found is None or local_name(found) != key:
             return False
         return not quantity._is_multiplicative or _same_multiplier(found, quantity)
@@ -247,12 +248,18 @@ class UnitMapper:
         """Look the whole unit string up, for a unit whose parts generate nothing."""
         if self.resolver is None or not quantity._is_multiplicative:
             return None
-        found = self._resolve(unit)
+        found = self.resolve(unit)
         if found is not None and _same_multiplier(found, quantity):
             return local_name(found)
         return None
 
-    def _resolve(self, identifier: str) -> Mapping[str, Any] | None:
+    def resolve(self, identifier: str) -> Mapping[str, Any] | None:
+        """Return the resolver's answer for a unit identifier, or ``None``.
+
+        ``None`` too when there is no resolver or it raises.
+        """
+        if self.resolver is None:
+            return None
         try:
             return self.resolver(identifier) or None
         except Exception:
@@ -405,7 +412,7 @@ def local_name(found: Mapping[str, Any]) -> str:
         >>> local_name({"uri": "http://qudt.org/vocab/unit/GAL_US-PER-MIN"})
         'GAL_US-PER-MIN'
     """
-    return str(found.get("uri", "")).rsplit("/", 1)[-1]
+    return qudt_key(str(found.get("uri", "")))
 
 
 def _same_multiplier(found: Mapping[str, Any], quantity: Any) -> bool:

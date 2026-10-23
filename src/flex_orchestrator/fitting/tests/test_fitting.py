@@ -482,6 +482,27 @@ def test_variants_share_the_data_and_render_tags(orch):
     assert summary["ro_average"].data_hash == summary["ro_linear"].data_hash
 
 
+def test_fits_on_ray_find_ray_as_studies_do(orch, monkeypatch):
+    from flex_orchestrator.fitting import command
+
+    seen = []
+
+    def on_ray(plans, data, workers, execution, progress, address):
+        seen.append(address)
+        return {}  # nothing fitted there: they are fitted here
+
+    monkeypatch.setattr(command, "_on_ray", on_ray)
+    variants = [
+        {"name": "a", "regressor": "multilinear"},
+        {"name": "b", "regressor": "constant_intensity"},
+    ]
+    orch.ray_address = "ray://orch:1"  # Orchestrator(ray_address=) or the env
+    fit(orch, tag="x_{name}", variants=variants, max_workers=2)
+    fit(orch, tag="y_{name}", variants=variants, max_workers=2, ray_address="ray://p:1")
+    assert seen == ["ray://orch:1", "ray://p:1"]
+    assert orch.surrogate_spec("y_b").spec["surrogate_type"] == "constant_intensity"
+
+
 def test_on_existing(orch):
     first = fit(orch, tag="ro", regressor="multilinear")
     with pytest.raises(TagExistsError):

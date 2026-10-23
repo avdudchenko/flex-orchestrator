@@ -40,14 +40,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from flex_orchestrator.errors import StudyConfigError
-from flex_orchestrator.fitting.models import FitParams
-
-
-class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from flex_orchestrator.fitting.models import FitParams, _Strict
 
 
 class SurrogateSweep(_Strict):
@@ -185,6 +181,14 @@ class HooksConfig(_Strict):
 
     Unset slots use the orchestrator's hooks; hooks passed to
     ``execute_study`` win over these.
+
+    Attributes:
+        build: The build hook.
+        solve: The solve hook.
+        apply_surrogate: Applies a surrogate sweep's surrogates to the spec.
+        swap_surrogate: Swaps a surrogate on a live model.
+        time_sets: Names a built model's time Sets for the exporter.
+        configure: Sets a configuration sweep's options in the spec.
     """
 
     build: str | None = None
@@ -247,10 +251,10 @@ class Execution(_Strict):
             submitted, so it includes starting a worker (a few seconds the
             first time). A task that runs over is killed and stored as a failed
             result (``termination: timeout``); it isn't retried. Two hours by
-            default; ``None`` means no limit. In-process the limit is recorded
-            but not enforced.
-        retries: How many times a task is tried again when building raises,
-            the solve hook raises, or its Ray worker dies.
+            default; ``None`` means no limit. In-process it is not enforced.
+        retries: How many times a task is built and solved again when building
+            or exporting raises, the solve hook raises, or its Ray worker dies.
+            A task whose spec or result can't be stored isn't retried.
         on_error: Go on with the other tasks after one fails (``continue``) or
             stop (``stop``); on Ray, ``stop`` cancels the tasks still running.
     """

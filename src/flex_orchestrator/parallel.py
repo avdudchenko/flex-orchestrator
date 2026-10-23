@@ -9,8 +9,9 @@ import strings, never a model, a connection or a credential.
 
 The loop keeps at most ``max_workers`` tasks running, kills a task that runs
 past ``task_timeout_s`` (``ray.cancel(force=True)``), retries a task whose
-worker died or whose build or solve raised, and cancels everything still
-running when the command is cancelled or ``on_error: stop`` trips.
+worker died or whose build or solve raised (never one whose spec or result
+couldn't be stored), and cancels everything still running when the command is
+cancelled or ``on_error: stop`` trips.
 
 Ray is local unless an address is given: ``ray.init(address="local",
 namespace="flexorch", include_dashboard=False)``, started once per process
@@ -19,11 +20,11 @@ and reused. A Ray the caller already connected to is used as it is.
 
 import dataclasses
 import time
-import traceback
 from collections import deque
 from typing import Any
 
-from flex_orchestrator.errors import StudyConfigError
+from flex_orchestrator.errors import StudyConfigError, TagExistsError
+from flex_orchestrator.hooks import SolveOutcome
 
 NAMESPACE = "flexorch"
 """str: The Ray namespace the orchestrator's tasks run in."""
@@ -44,6 +45,15 @@ POLL_S = 0.25
 
 def connect(address: str | None = None) -> Any:
     """Return the ``ray`` module, connected: to ``address``, or local Ray.
+
+    A Ray this process is already connected to is used as it is.
+
+    Args:
+        address: A Ray cluster, e.g. ``"ray://tenant-ray-head:10001"``; ``None``
+            starts local Ray (once per process).
+
+    Returns:
+        The ``ray`` module.
 
     Raises:
         StudyConfigError: If Ray isn't installed.
@@ -75,6 +85,16 @@ def remote(
 
     Ray's own retries are off (``max_retries=0``): the loops here retry, so
     one budget (``retries``) covers a raising task and a dead worker alike.
+
+    Args:
+        ray: The connected ``ray`` module (:func:`connect`).
+        fn: A module-level function, importable on the workers.
+        num_cpus: CPUs each call reserves.
+        memory: Bytes of memory each call reserves, if set.
+        max_calls: Restart a worker process after this many calls, if set.
+
+    Returns:
+        The remote function; call it with ``.remote(...)``.
     """
     options: dict[str, Any] = {
         "num_cpus": num_cpus,
@@ -111,9 +131,7 @@ def run_tasks(
         CommandCancelled: If the command is cancelled; running tasks are
             cancelled first.
     """
-    from flex_orchestrator.errors import TagExistsError
-    from flex_orchestrator.hooks import SolveOutcome
-    from flex_orchestrator.study import task as steps
+    from flex_orchestrator.study import task as steps  # it imports the orchestrator
 
     ray = connect(execution.ray_address)
     fn = remote(
@@ -125,6 +143,9 @@ def run_tasks(
     )
     timeout = execution.task_timeout_s
     pending, running, results = deque(tasks), {}, []
+    # The main process prepares and stores while the workers solve: up to
+    # ``workers`` tasks are prepared ahead, so a freed slot is filled at once.
+    prepared: deque = deque()
     bundles: dict[str, Any] = {}
     stopped = False
 
@@ -139,34 +160,20 @@ def run_tasks(
 
     def record(result: Any) -> None:
         nonlocal stopped
-        results.append(result)
-        orch.on_task_result(result)
-        progress.advance(message=f"{result.tag}: {result.status}")
-        if result.status in ("failed", "error") and execution.on_error == "stop":
+        if steps.report(orch, progress, execution, results, result):
             stopped = True
-            cancel_all()
-
-    def cancel_all() -> None:
-        for ref in list(running):
-            ray.cancel(ref, force=True)
-        running.clear()
+            _cancel(ray, running)
+            running.clear()
 
     def finish(work: Any, done: Any, attempts: int) -> Any:
         try:
             return steps.finish(orch, work, done, attempts)
         except Exception as exc:
-            return steps.TaskResult(
-                index=work.task.index,
-                tag=work.task.tag,
-                status="error",
-                spec_tag=work.bundle.tag,
-                error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                attempts=attempts,
-            )
+            return steps.errored(work.task, steps.error_text(exc), attempts)
 
     def prepare_next() -> None:
         task = pending.popleft()
-        if task.on_existing == "skip" and steps._stored(orch, task.tag):
+        if task.on_existing == "skip" and steps.stored(orch, task.tag):
             record(steps.skipped(task))
             return
         try:
@@ -174,20 +181,8 @@ def run_tasks(
         except TagExistsError:
             raise
         except Exception as exc:
-            record(
-                steps.TaskResult(
-                    index=task.index,
-                    tag=task.tag,
-                    status="error",
-                    spec_tag=task.spec_tag,
-                    error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                    attempts=1,
-                )
-            )
+            record(steps.errored(task, steps.error_text(exc), 1))
 
-    # The main process prepares and stores while the workers solve: up to
-    # ``workers`` tasks are prepared ahead, so a freed slot is filled at once.
-    prepared: deque = deque()
     try:
         while running or prepared or (pending and not stopped):
             progress.check()
@@ -200,7 +195,7 @@ def run_tasks(
                 prepare_next()  # a free slot and nothing prepared
                 continue
             if not running:
-                continue
+                continue  # nothing is left: the loop condition ends it
             if ahead:  # collect what's done, else prepare the next task
                 ready, _ = ray.wait(list(running), num_returns=len(running), timeout=0)
                 if not ready:
@@ -222,8 +217,8 @@ def run_tasks(
             if timeout is not None:
                 now = time.monotonic()
                 for ref, (work, attempts, started) in list(running.items()):
-                    if now - started <= timeout:
-                        continue
+                    if ref not in running or now - started <= timeout:
+                        continue  # cancelled by on_error: stop, or in time
                     ray.cancel(ref, force=True)
                     del running[ref]
                     outcome = SolveOutcome(
@@ -234,7 +229,7 @@ def run_tasks(
                     )
                     record(finish(work, steps.Done(outcome=outcome), attempts))
     except BaseException:
-        cancel_all()
+        _cancel(ray, running)
         raise
     return sorted(results, key=lambda r: r.index)
 
@@ -250,8 +245,21 @@ def map_ordered(
 ) -> list[Any]:
     """Run ``fn(*job)`` for every job on Ray, at most ``workers`` at once.
 
-    Returns the results in job order. ``options`` go to :func:`remote`. An
-    exception in a job is raised here, after the others are cancelled.
+    Args:
+        fn: A module-level function, importable on the workers.
+        jobs: The positional arguments of each call.
+        workers: Calls running at once.
+        ray_address: The Ray to connect to (:func:`connect`).
+        progress: Checked for cancellation while waiting, if given.
+        **options: Passed to :func:`remote` (``num_cpus``, ``memory``,
+            ``max_calls``).
+
+    Returns:
+        What each call returned, in job order.
+
+    Raises:
+        Exception: The first exception a job raised, after the jobs still
+            running are cancelled; ``CommandCancelled`` likewise.
     """
     ray = connect(ray_address)
     remote_fn = remote(ray, fn, **options)
@@ -269,7 +277,12 @@ def map_ordered(
             for ref in ready:
                 results[running.pop(ref)] = ray.get(ref)
     except BaseException:
-        for ref in running:
-            ray.cancel(ref, force=True)
+        _cancel(ray, running)
         raise
     return [results[i] for i in range(len(jobs))]
+
+
+def _cancel(ray: Any, refs: Any) -> None:
+    """Kill every task in ``refs`` (``ray.cancel(force=True)``)."""
+    for ref in list(refs):
+        ray.cancel(ref, force=True)

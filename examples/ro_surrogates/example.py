@@ -32,6 +32,13 @@ from flex_orchestrator import Orchestrator
 HERE = Path(__file__).parent
 flow = u.m**3 / u.hr
 
+UNITS = {"permeate": "m^3/hr", "power_electrical": "kW"}  # of the operating data
+KEEP = [  # what each result stores
+    "plant.ro.permeate",
+    "plant.ro.power_electrical",
+    "costing.aggregate_operating_cost",
+]
+
 
 def sec(permeate):
     """The RO's true specific energy (kWh/m^3), lowest at 90 m^3/hr."""
@@ -88,55 +95,12 @@ def ro_model():
     return m
 
 
-if __name__ == "__main__":
-    orch = Orchestrator(data_dir=HERE / ".flexorch")
-    if "ro_surrogates" in orch.studies():
-        orch.delete_study("ro_surrogates")
-    orch.create_study("ro_surrogates")
+def compare(orch):
+    """Print each result's cost and its RO energy against the true curve.
 
-    # 1. The synthetic plant data.
-    orch.store_data(
-        "ro_operation",
-        operating_data(),
-        units={"permeate": "m^3/hr", "power_electrical": "kW"},
-    )
-
-    # 2. The model's spec, emitted by flex-pse.
-    orch.store_model_spec(
-        "base", fo.emit_model(ro_model(), relative_to=HERE), base_dir=HERE
-    )
-
-    # 3. Two fits from the stored data: the average intensity, and power as a
-    # linear function of permeate flow.
-    data = orch.get_data("ro_operation", frame="pandas")
-    X, y = data[["permeate"]], data[["power_electrical"]]
-    average = ConstantIntensityRegressor().fit(X, y)
-    linear = LinearRegressor().fit(
-        X, y, input_units={"permeate": "m^3/hr"}, output_units="kW"
-    )
-    print(f"average intensity: {average.coefficient:.3f} kWh/m^3")
-    slope, intercept = linear.coefficients["permeate"], linear.coefficients["intercept"]
-    print(f"linear surrogate: power = {slope:.3f} * permeate {intercept:+.1f} kW")
-    orch.store_surrogate_spec("ro_average", average.to_surrogate_spec())
-    orch.store_surrogate_spec("ro_linear", linear.to_surrogate_spec())
-
-    # 4. Solve with each: the average fixes the RO's energy_intensity, the linear
-    # fit replaces its power relation.
-    keep = [
-        "plant.ro.permeate",
-        "plant.ro.power_electrical",
-        "costing.aggregate_operating_cost",
-    ]
-    fixed = {
-        "plant.ro.energy_intensity": {"value": average.coefficient, "units": "kWh/m^3"}
-    }
-    orch.solve_and_store("fixed_intensity", orch.build("base", **fixed), include=keep)
-    spec = orch.apply_surrogate("base", unit="plant.ro", surrogate="ro_linear")
-    orch.store_model_spec("ro_linear", spec, parent="base")
-    orch.solve_and_store("linear_surrogate", orch.build("ro_linear"), include=keep)
-
-    # 5. The results, read back from Acquirium. "True" energy is what the RO would
-    # really use running the schedule the model picked.
+    "True" energy is what the RO would really use running the schedule the
+    model picked.
+    """
     print("Comparing estimated vs real power use due to surrogate simplifications")
     for result in orch.stored_model_results():
         cost = result.scalars()["costing.aggregate_operating_cost"]
@@ -147,4 +111,51 @@ if __name__ == "__main__":
             f"{result.tag}: ${cost:,.2f}, RO energy {model_kwh:,.0f} kWh "
             f"(true {true_kwh:,.0f} kWh)"
         )
-    orch.close()
+
+
+if __name__ == "__main__":
+    with Orchestrator(data_dir=HERE / ".flexorch") as orch:
+        if "ro_surrogates" in orch.studies():
+            orch.delete_study("ro_surrogates")
+        orch.create_study("ro_surrogates")
+
+        # 1. The synthetic plant data.
+        orch.store_data("ro_operation", operating_data(), units=UNITS)
+
+        # 2. The model's spec, emitted by flex-pse.
+        orch.store_model_spec(
+            "base", fo.emit_model(ro_model(), relative_to=HERE), base_dir=HERE
+        )
+
+        # 3. Two fits from the stored data: the average intensity, and power as
+        # a linear function of permeate flow.
+        data = orch.get_data("ro_operation", frame="pandas")
+        X, y = data[["permeate"]], data[["power_electrical"]]
+        average = ConstantIntensityRegressor().fit(X, y)
+        linear = LinearRegressor().fit(
+            X, y, input_units={"permeate": "m^3/hr"}, output_units="kW"
+        )
+        print(f"average intensity: {average.coefficient:.3f} kWh/m^3")
+        slope = linear.coefficients["permeate"]
+        intercept = linear.coefficients["intercept"]
+        print(f"linear surrogate: power = {slope:.3f} * permeate {intercept:+.1f} kW")
+        orch.store_surrogate_spec("ro_average", average.to_surrogate_spec())
+        orch.store_surrogate_spec("ro_linear", linear.to_surrogate_spec())
+
+        # 4. Solve with each: the average fixes the RO's energy_intensity, the
+        # linear fit replaces its power relation.
+        fixed = {
+            "plant.ro.energy_intensity": {
+                "value": average.coefficient,
+                "units": "kWh/m^3",
+            }
+        }
+        orch.solve_and_store(
+            "fixed_intensity", orch.build("base", **fixed), include=KEEP
+        )
+        spec = orch.apply_surrogate("base", unit="plant.ro", surrogate="ro_linear")
+        orch.store_model_spec("ro_linear", spec, parent="base")
+        orch.solve_and_store("linear_surrogate", orch.build("ro_linear"), include=KEEP)
+
+        # 5. The results, read back from Acquirium.
+        compare(orch)

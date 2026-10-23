@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from flex_orchestrator import data as datasets
-from flex_orchestrator import spec_store
+from flex_orchestrator import results, spec_store
 from flex_orchestrator.archive.models import (
     DatasetColumn,
     DatasetFile,
@@ -39,6 +40,7 @@ from flex_orchestrator.data import DATA_KIND, MANIFEST
 from flex_orchestrator.errors import ArchiveError
 from flex_orchestrator.export import ModelData
 from flex_orchestrator.orchestrator import (
+    _VERSION_KEYS,
     LEDGERS,
     MODEL_SPEC,
     MODEL_SPEC_REF,
@@ -150,7 +152,7 @@ def export_study(
         writer.checksums()
         if target.exists():
             shutil.rmtree(target)
-        os.replace(partial, target)
+        _replace(partial, target)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
@@ -159,6 +161,12 @@ def export_study(
 
 def export_result(orch: Any, tag: str, path: str | os.PathLike[str]) -> Path:
     """Export one stored result to a JSON file (``.json.gz`` compresses it).
+
+    Args:
+        orch: The orchestrator, with the result's study selected.
+        tag: The result's tag.
+        path: The file to write; a ``.gz`` suffix gzips it. Its folder is
+            created if needed.
 
     Returns:
         The file written.
@@ -321,8 +329,7 @@ def encode_values(
     (``null`` where it has none) and, if it covers only part of time, the
     positions it covers.
     """
-    times = sorted({to_utc(t) for s in data.timeseries() for t in s.timestamps or []})
-    position = {when: i for i, when in enumerate(times)}
+    times, rows_of = results.layout(data)
     timeseries, scalars = {}, {}
     for series in data:
         common = {
@@ -335,14 +342,9 @@ def encode_values(
         if series.kind == "scalar":
             scalars[series.key] = ResultScalar(**common, value=series.values[0])
             continue
-        rows = [position[to_utc(t)] for t in series.timestamps or []]
-        values: list[float | None] = [None] * len(times)
-        for row, value in zip(rows, series.values, strict=True):
-            values[row] = value
+        rows = rows_of[series.key]
         timeseries[series.key] = ResultSeries(
-            **common,
-            values=values,
-            rows=None if rows == list(range(len(times))) else rows,
+            **common, values=results.spread(rows, series.values, len(times)), rows=rows
         )
     return [_iso(t) for t in times], timeseries, scalars, data.stale()
 
@@ -353,6 +355,7 @@ class _Writer:
     def __init__(self, root: Path, compress: bool) -> None:
         self.root, self.compress = root, compress
         self.files: list[str] = []
+        self._written: set[str] = set()
 
     def json(self, relative: str, payload: Any, compress: bool | None = None) -> None:
         data = _encode(payload)
@@ -362,8 +365,9 @@ class _Writer:
         self.raw(relative, data)
 
     def raw(self, relative: str, data: bytes) -> None:
-        if relative in self.files:
+        if relative in self._written:
             return
+        self._written.add(relative)
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
@@ -376,6 +380,19 @@ class _Writer:
             for name in sorted([*self.files, MANIFEST_FILE])
         ]
         (self.root / CHECKSUMS).write_text("".join(lines), encoding="utf-8")
+
+
+def _replace(source: Path, target: Path, attempts: int = 6) -> None:
+    # On Windows a file just written can be held for a moment by an antivirus
+    # or the search indexer; renaming its folder fails until it is let go.
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.1 * 2**attempt)  # 3 s in all
 
 
 def _encode(payload: Any) -> bytes:
@@ -395,16 +412,8 @@ def _iso(when: Any) -> str | None:
 
 
 def _versions() -> dict[str, str | None]:
-    return {
-        "flex-orchestrator": _version_of("flex-orchestrator"),
-        "flex-pse": _version_of("flex-pse"),
-        "acquirium": _version_of("acquirium"),
-    }
+    return {dist: _version_of(dist) for dist in _VERSION_KEYS}
 
 
 def _run_versions(metadata: dict[str, Any]) -> dict[str, str | None]:
-    return {
-        "flex-orchestrator": metadata.get("flexorch_version"),
-        "flex-pse": metadata.get("flexpse_version"),
-        "acquirium": metadata.get("acquirium_version"),
-    }
+    return {dist: metadata.get(key) for dist, key in _VERSION_KEYS.items()}

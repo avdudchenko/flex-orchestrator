@@ -9,6 +9,7 @@ kept; each item records where it came from in ``flexorch_imported_from``
 (the study, its original run id and metadata, who exported it and when).
 """
 
+import functools
 import hashlib
 import os
 from collections.abc import Iterator
@@ -20,7 +21,6 @@ from typing import Any, Literal
 import pandas as pd
 from pydantic import ValidationError
 
-from flex_orchestrator import spec_store
 from flex_orchestrator.archive.export import CHECKSUMS, MANIFEST_FILE, SPEC_DIRS
 from flex_orchestrator.archive.load import decode_values, read_json
 from flex_orchestrator.archive.models import (
@@ -37,14 +37,7 @@ from flex_orchestrator.errors import (
     TagNotFoundError,
 )
 from flex_orchestrator.hooks import SolveOutcome
-from flex_orchestrator.orchestrator import (
-    DATA_KIND,
-    FIT_KIND,
-    LEDGERS,
-    MODEL_SPEC,
-    RESULT_KIND,
-    _Written,
-)
+from flex_orchestrator.orchestrator import DATA_KIND, FIT_KIND, MODEL_SPEC, RESULT_KIND
 from flex_orchestrator.specs import SpecRecord
 
 IMPORTED_FROM = "flexorch_imported_from"
@@ -89,7 +82,9 @@ def import_study(
 
     Raises:
         ArchiveError: If a checksum doesn't match, a file is missing or
-            unlisted, or a file's schema isn't ``flexorch-export/1``.
+            unlisted, a file's schema isn't ``flexorch-export/1``, or a result
+            names a spec whose stored hash differs from the one it was built
+            from.
         StudyExistsError: If the study exists and ``on_existing`` is
             ``error``.
     """
@@ -113,54 +108,15 @@ def import_study(
         "exported_by": manifest.exported_by,
     }
     files = manifest.files
-    for file in _files(folder, files, "fits/", FitFile):
-        _import(
-            orch,
-            report,
-            "fits",
-            FIT_KIND,
-            file.tag,
-            file.run_id,
-            origin,
-            file,
-            lambda f: _fit(orch, f, report),
-        )
-    for file in _specs_in_order(folder, files):
-        _import(
-            orch,
-            report,
-            "specs",
-            file.kind,
-            file.tag,
-            file.run_id,
-            origin,
-            file,
-            lambda f: _spec(orch, folder, f, report),
-        )
-    for file in _files(folder, files, "data/", DatasetFile):
-        _import(
-            orch,
-            report,
-            "data",
-            DATA_KIND,
-            file.name,
-            file.run_id,
-            origin,
-            file,
-            lambda f: _dataset(orch, f),
-        )
-    for file in _files(folder, files, "results/", ResultFile):
-        _import(
-            orch,
-            report,
-            "results",
-            RESULT_KIND,
-            file.tag,
-            file.run_id,
-            origin,
-            file,
-            lambda f: _result(orch, f),
-        )
+    add = functools.partial(_import, orch, report, origin)
+    for f in _files(folder, files, "fits/", FitFile):
+        add("fits", FIT_KIND, f.tag, f, lambda f: _fit(orch, f))
+    for f in _specs_in_order(folder, files):
+        add("specs", f.kind, f.tag, f, lambda f: _spec(orch, folder, f, report))
+    for f in _files(folder, files, "data/", DatasetFile):
+        add("data", DATA_KIND, f.name, f, lambda f: _dataset(orch, f))
+    for f in _files(folder, files, "results/", ResultFile):
+        add("results", RESULT_KIND, f.tag, f, lambda f: _result(orch, f))
     return report
 
 
@@ -235,19 +191,15 @@ def _specs_in_order(folder: Path, files: list[str]) -> list[SpecFile]:
 def _import(
     orch: Any,
     report: ImportReport,
+    origin: dict[str, Any],
     part: str,
     kind: str,
     tag: str,
-    run_id: str,
-    origin: dict[str, Any],
     file: Any,
     store: Any,
 ) -> None:
-    provenance = {
-        **origin,
-        "run_id": run_id,
-        "metadata": getattr(file, "metadata", {}),
-    }
+    run_id = file.run_id
+    provenance = {**origin, "run_id": run_id, "metadata": file.metadata}
     hooks = getattr(file, "hooks", None)
     forced = {IMPORTED_FROM: provenance}
     if hooks:
@@ -271,7 +223,7 @@ def _has(orch: Any, kind: str, tag: str) -> bool:
     return True
 
 
-def _fit(orch: Any, file: FitFile, report: ImportReport) -> str:
+def _fit(orch: Any, file: FitFile) -> str:
     from flex_orchestrator.fitting import store as fits
 
     records: dict[str, Any] = {
@@ -310,17 +262,10 @@ def _spec(orch: Any, folder: Path, file: SpecFile, report: ImportReport) -> str:
     old_fit = file.metadata.get("fit_run_id")
     if old_fit is not None:
         extra["fit_run_id"] = report.run_ids.get(old_fit, old_fit)
-    for key in ("data_hash",):
-        if key in file.metadata:
-            extra[key] = file.metadata[key]
-    ledger = orch._ledger(orch.study, LEDGERS[file.kind])
-
-    def write() -> _Written:
-        metadata = {**orch._metadata(file.tag, file.kind), **record.metadata()}
-        return _Written(spec_store.write(orch.backend, ledger, record, data, metadata))
-
+    if "data_hash" in file.metadata:
+        extra["data_hash"] = file.metadata["data_hash"]
     with orch._with_metadata(extra):
-        return orch._guarded(file.kind, file.tag, False, write).run_id
+        return orch._write_spec(record, data)
 
 
 def _dataset(orch: Any, file: DatasetFile) -> str:
@@ -336,11 +281,7 @@ def _dataset(orch: Any, file: DatasetFile) -> str:
 
 def _result(orch: Any, file: ResultFile) -> str:
     data = decode_values(file)
-    outcome = None
-    if file.solve_outcome is not None:
-        outcome = SolveOutcome.model_validate(
-            {k: v for k, v in file.solve_outcome.items() if k != "ok"}
-        )
+    outcome = SolveOutcome.from_stored(file.solve_outcome)
     spec = None
     ref = file.model_spec_ref
     if ref is not None and _has(orch, MODEL_SPEC, ref["tag"]):

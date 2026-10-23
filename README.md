@@ -1,0 +1,85 @@
+# flex-orchestrator
+
+flex-orchestrator runs [flex-pse](https://github.com/flex-pse/flex-pse)
+process-model studies and stores everything they need and produce in
+[Acquirium](https://github.com/DataDrivenCPS/acquirium): model specs,
+operating data, surrogate fits and solved results. A study is a model spec
+plus sweeps (surrogates, variables, configuration options, cases). Each solve is stored as a run you can query,
+compare, export to disk, and import elsewhere. See [PLAN.md](PLAN.md) for the
+design.
+
+## Install
+
+flex-pse isn't on PyPI yet, so use the conda environments, which install it
+and the solvers:
+
+```
+conda env create -f environment.yml        # deployment: pinned upstream commits
+conda env create -f environment-dev.yml    # development: editable sibling checkouts
+idaes get-extensions                       # IPOPT, if you need it
+```
+
+Parallel execution needs Ray (the `ray` extra): `pip install -e ".[ray]"`.
+
+## Connecting
+
+`Orchestrator()` connects to one Acquirium. The arguments pick the mode:
+
+| Mode | Arguments | Notes |
+| --- | --- | --- |
+| local | `data_dir=".flexorch"` (the default) | A managed Acquirium with DuckDB. No credentials. |
+| Postgres | `db="postgresql://user@host/db"`, `data_dir=...` | The login comes from `FLEXORCH_DB_PASSWORD_FILE`, `FLEXORCH_DB_USER` / `FLEXORCH_DB_PASSWORD`, or libpq (`PGPASSWORD`, `~/.pgpass`). It never comes from code. |
+| remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. |
+
+## Quick start
+
+Trimmed from [examples/ro_surrogates/example.py](examples/ro_surrogates/example.py),
+which defines `operating_data`, `ro_model`, `UNITS`, `KEEP` and the fitted
+`linear` surrogate:
+
+```python
+from flex_orchestrator import Orchestrator
+
+with Orchestrator(data_dir=".flexorch") as orch:
+    orch.create_study("ro_surrogates")
+    orch.store_data("ro_operation", operating_data(), units=UNITS)
+    orch.store_model_spec("base", fo.emit_model(ro_model(), relative_to=HERE), base_dir=HERE)
+    orch.store_surrogate_spec("ro_linear", linear.to_surrogate_spec())
+    spec = orch.apply_surrogate("base", unit="plant.ro", surrogate="ro_linear")
+    orch.store_model_spec("ro_linear", spec, parent="base")
+    orch.solve_and_store("linear_surrogate", orch.build("ro_linear"), include=KEEP)
+    for result in orch.stored_model_results():
+        print(result.tag, result.scalars()["costing.aggregate_operating_cost"])
+```
+
+## Studies from a config
+
+A study config, as a dict or a YAML/JSON file, holds the base spec, the fits,
+the sweeps and what to store. Run it from Python with
+`orch.execute_study(config)`, or from the command line:
+
+```
+flex-orch --data-dir .flexorch run study.yaml --study my_study [--dry-run]
+flex-orch --data-dir .flexorch export my_study export/my_study
+flex-orch --data-dir .flexorch import export/my_study --name copy
+```
+
+[examples/ro_study/](examples/ro_study/README.md) has one script per sweep
+type. The config's JSON Schema is in [docs/schemas/](docs/schemas/).
+
+## Running in parallel on Ray
+
+Set `execution.max_workers` (or pass `max_workers=` / `--workers`) above 1, and
+the tasks run on Ray. Workers build and solve; the main process stores every
+result, so workers never hold database credentials. Ray is local unless you
+give a cluster: `execution.ray_address`, `Orchestrator(ray_address=...)`,
+`FLEXORCH_RAY_ADDRESS`, or `--ray-address`. Each task has a time limit,
+`execution.task_timeout_s`, which is 2 hours by default (`null` means no
+limit). See [docs/decisions/0001-ray-execution.md](docs/decisions/0001-ray-execution.md).
+
+## More
+
+- [examples/](examples/README.md): the RO examples and a sample plugin
+  ([examples/plugins/ro_tools](examples/plugins/ro_tools/README.md)).
+- [benchmarking/](benchmarking/): Acquirium storage timings.
+- [CHANGELOG.md](CHANGELOG.md) and [PLAN.md](PLAN.md).

@@ -538,7 +538,7 @@ def test_float_values_in_tags(output_name, tags):
     ("output_name", "message"),
     [
         ("v_{v:.1f}", "or format its values more precisely"),
-        ("v_{v:d}", "can't format 0.12 as \{:d\}"),
+        ("v_{v:d}", r"can't format 0.12 as \{:d\}"),
     ],
 )
 def test_formats_that_fail(output_name, message):
@@ -582,7 +582,8 @@ def test_the_ray_address_comes_from_the_call_the_config_or_the_environment():
     assert seen == ["ray://env:1", "ray://cfg:1", "ray://call:1"]
 
 
-def test_a_task_that_cant_be_prepared_is_an_error(orch):
+def test_a_task_that_cant_be_prepared_is_an_error_and_isnt_retried(orch):
+    # Retries are for the model work; a spec that can't be read stays missing.
     run = orch.execute_study(
         {
             "base_model_spec": "base",
@@ -591,8 +592,55 @@ def test_a_task_that_cant_be_prepared_is_an_error(orch):
         }
     )
     [result] = run.results
-    assert result.status == "error" and result.attempts == 2
+    assert result.status == "error" and result.attempts == 1
     assert "nope" in result.error
+
+
+def test_a_task_whose_result_cant_be_stored_isnt_retried(orch, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise RuntimeError("store is down")
+
+    monkeypatch.setattr(orch, "store_model_data", refuse)
+    run = orch.execute_study(config(execution={"retries": 2}))
+    assert {r.status for r in run.results} == {"error"}
+    assert {r.attempts for r in run.results} == {1}
+    assert "store is down" in run.results[0].error
+
+
+def test_registered_hooks_run_in_process(orch):
+    orch.register_hooks("mine", build=tiny_build, solve=fake_solve)
+    run = orch.execute_study(config(hooks={"build": "mine", "solve": "mine"}))
+    assert run.counts() == {"succeeded": 4}
+    with pytest.raises(HookError, match="No hooks are registered as 'other'"):
+        orch.execute_study(config(hooks={"build": "other"}))
+
+
+def test_cancelling_a_study_cancels_its_fits(orch, monkeypatch):
+    from flex_orchestrator.errors import CommandCancelled
+    from flex_orchestrator.ext.commands import Progress
+    from flex_orchestrator.study import runner
+
+    study = Progress()
+
+    def cancelled_mid_fit(orch, fit, progress, execution, workers):
+        study.cancel()
+        progress.check()  # the fit's own progress sees it
+
+    monkeypatch.setattr(runner, "run_fits", cancelled_mid_fit)
+    cfg = config(
+        fits=[
+            {
+                "tag": "f",
+                "regressor": "multilinear",
+                "X": {"dataset": "d"},
+                "y": {"dataset": "d"},
+            }
+        ],
+    )
+    params = runner.ExecuteParams(config=load_config(cfg))
+    with pytest.raises(CommandCancelled):
+        runner.execute_study.fn(orch, params, study)
+    assert results(orch) == {}
 
 
 def test_time_sets_hooks_in_a_worker(orch, monkeypatch):

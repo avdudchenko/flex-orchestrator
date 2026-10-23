@@ -74,8 +74,9 @@ class Connection:
         target: Where it is, safe to log: the data directory, the redacted
             ``user@host:port/db``, or the URL.
         acquirium: The Acquirium client.
-        owned: Whether this process started the server (then
-            :meth:`close` stops it).
+        owned: Whether this process started the server. Informational:
+            :meth:`close` calls ``aq.shutdown``, which stops only a server
+            this process started.
     """
 
     mode: Mode
@@ -123,7 +124,9 @@ def connect(
         db_credentials: An explicit login for mode 2, for developers and tests.
         exact_only: Start the managed server without text-matching indexes.
         timeout: Seconds to wait for the server.
-        environ: Where credentials are read from; ``os.environ`` by default.
+        environ: Where the ``FLEXORCH_DB_*`` credentials are read from;
+            ``os.environ`` by default. libpq's own ``PG*`` variables and
+            ``~/.pgpass`` are always read from the process.
 
     Raises:
         ValueError: For arguments that mix modes, or a password in ``db``.
@@ -233,7 +236,11 @@ def postgres_dsn(db: str, user: str | None = None) -> str:
 
 
 def redact(dsn: str) -> str:
-    """Return ``user@host:port/db`` for a DSN, without any secret."""
+    """Return ``user@host:port/db`` for a DSN, without any secret.
+
+    A DSN without a user shows libpq's: ``PGUSER`` from the process
+    environment.
+    """
     from psycopg.conninfo import conninfo_to_dict
 
     params = conninfo_to_dict(dsn)

@@ -33,7 +33,6 @@ STUDY = {
 }
 
 if __name__ == "__main__":
-    orch = new_study("ro_configuration_sweep")
-    orch.execute_study(STUDY)
-    report(orch)
-    orch.close()
+    with new_study("ro_configuration_sweep") as orch:
+        orch.execute_study(STUDY)
+        report(orch)

@@ -5,8 +5,9 @@ or solve a model. A run is ``build(spec, **overrides)`` followed by
 ``solve(model, **options)``, and both steps are *hooks*: plain callables that
 follow :class:`BuildFn` and :class:`SolveFn`. Two optional hooks change the
 surrogate a unit uses, either in the spec before building
-(:class:`ApplySurrogateFn`) or on a live model (:class:`SwapSurrogateFn`), and
-one sets a configuration option in a spec (:class:`ConfigureFn`).
+(:class:`ApplySurrogateFn`) or on a live model (:class:`SwapSurrogateFn`),
+one sets a configuration option in a spec (:class:`ConfigureFn`), and one
+names a built model's time Sets for the exporter (:class:`TimeSetsFn`).
 
 A hook can be given three ways, and a :class:`HookSet` slot accepts any of them:
 
@@ -23,22 +24,13 @@ this module doesn't import flex-pse (or pyomo) and works without it.
 import importlib
 import time
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from flex_orchestrator.errors import HookError
-
-HOOK_KINDS = (
-    "build",
-    "solve",
-    "apply_surrogate",
-    "swap_surrogate",
-    "time_sets",
-    "configure",
-)
-"""tuple[str, ...]: The hook slots a :class:`HookSet` has."""
 
 SolveStatus = Literal["ok", "failed", "error"]
 """How a solve ended: ``"ok"`` (optimal), ``"failed"`` (the solver finished
@@ -78,6 +70,21 @@ class SolveOutcome(BaseModel):
     def ok(self) -> bool:
         """Whether the solve found an optimal solution."""
         return self.status == "ok"
+
+    @classmethod
+    def from_stored(cls, stored: Mapping[str, Any] | None) -> "SolveOutcome | None":
+        """Return the outcome a run stored (its JSON), or ``None`` if there is none.
+
+        The stored ``ok`` is dropped: it is computed from ``status``.
+
+        Example:
+            >>> stored = SolveOutcome(status="ok").model_dump(mode="json")
+            >>> SolveOutcome.from_stored(stored).ok
+            True
+        """
+        if stored is None:
+            return None
+        return cls.model_validate({k: v for k, v in stored.items() if k != "ok"})
 
 
 class BuildFn(Protocol):
@@ -282,8 +289,9 @@ class HookSet:
     def to_refs(self) -> dict[str, str]:
         """Return every set slot as an import string.
 
-        This is what is sent to Ray workers and recorded with each run.
-        Resolve registered names first, with :meth:`HookRegistry.resolve`.
+        For callers that need portable hooks, which a Ray worker or another
+        process can import. Resolve registered names first, with
+        :meth:`HookRegistry.resolve`.
 
         Returns:
             ``{kind: "package.module:function"}`` for every slot that is set.
@@ -320,6 +328,10 @@ class HookSet:
             refs[kind] = ref
         return refs
 
+
+HOOK_KINDS = tuple(f.name for f in fields(HookSet))
+"""tuple[str, ...]: The hook slots a :class:`HookSet` has: ``build``, ``solve``,
+``apply_surrogate``, ``swap_surrogate``, ``time_sets`` and ``configure``."""
 
 DEFAULT_HOOKS = HookSet(
     build="flex_orchestrator.flexpse:build",

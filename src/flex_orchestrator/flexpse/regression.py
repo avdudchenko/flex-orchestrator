@@ -19,6 +19,12 @@ from flex_orchestrator.errors import FitError
 def get_regressor(name: str) -> type:
     """Return the flex-pse regressor class for a ``SurrogateType`` name.
 
+    Args:
+        name: A flex-pse ``SurrogateType``, e.g. ``"multilinear"``.
+
+    Returns:
+        The regressor class.
+
     Raises:
         NotImplementedError: If the installed flex-pse reserves the type but
             doesn't fit it yet; the message names the installed version.
@@ -46,15 +52,26 @@ def predict_surrogate(spec: dict[str, Any], X: pd.DataFrame) -> list[float]:
     coefficient times the one input. Values are in the units the spec was
     fitted in, which are ``X``'s.
 
+    Args:
+        spec: The surrogate spec as JSON (``surrogate_type`` and ``data``).
+        X: The inputs, a column per input variable.
+
+    Returns:
+        One predicted value per row of ``X``.
+
     Raises:
-        FitError: For another surrogate type, or a term ``X`` doesn't have.
+        FitError: For another surrogate type, a term ``X`` doesn't have, or a
+            ``constant_intensity`` spec without exactly one coefficient and
+            one input column.
     """
     kind = spec.get("surrogate_type")
     coefficients = spec.get("data", {}).get("coefficients", {})
     if kind == "constant_intensity":
-        [(_, coefficient)] = coefficients.items()
-        if X.shape[1] != 1:
-            raise FitError("A constant_intensity fit has one input column.")
+        if len(coefficients) != 1 or X.shape[1] != 1:
+            raise FitError(
+                "A constant_intensity fit has one coefficient and one input column."
+            )
+        (coefficient,) = coefficients.values()
         return [float(v) * coefficient for v in X.iloc[:, 0]]
     if kind != "multilinear":
         raise FitError(

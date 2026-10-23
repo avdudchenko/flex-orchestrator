@@ -7,6 +7,9 @@ from flex_orchestrator.backend.base import (
     Run,
     StorageBackend,
     Variable,
+    align,
+    qudt_key,
+    recording,
     to_rows,
     to_utc,
 )
@@ -31,6 +34,9 @@ __all__ = [
     "Run",
     "StorageBackend",
     "Variable",
+    "align",
+    "qudt_key",
+    "recording",
     "to_rows",
     "to_utc",
 ]

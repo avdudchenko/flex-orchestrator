@@ -403,3 +403,22 @@ def test_invalid_files_in_an_export(study, tmp_path):
     rewrite("study.json", {"schema": SCHEMA, "study": 1})
     with pytest.raises(ArchiveError, match="study.json is invalid"):
         study.import_study(folder, name="bad-manifest")
+
+
+def test_a_locked_export_folder_is_renamed_once_let_go(study, tmp_path, monkeypatch):
+    # On Windows an antivirus can hold a just-written file for a moment.
+    from flex_orchestrator.archive import export as module
+
+    real, calls = module.os.replace, []
+
+    def flaky(source, target):
+        calls.append(target)
+        if len(calls) < 3:
+            raise PermissionError("[WinError 5] Access is denied")
+        real(source, target)
+
+    monkeypatch.setattr(module.os, "replace", flaky)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    study.export_study(tmp_path / "e")
+    assert len(calls) == 3
+    assert (tmp_path / "e" / CHECKSUMS).is_file()

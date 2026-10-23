@@ -6,7 +6,8 @@
                                           [--ray-address A] [--dry-run]
     flex-orch [CONNECTION] cmd NAME [--study S] [--OPTION VALUE ...]
     flex-orch [CONNECTION] commands
-    flex-orch [CONNECTION] export STUDY PATH [--parts ...] [--compress] [--overwrite]
+    flex-orch [CONNECTION] export STUDY PATH [--parts ...] [--tags ...]
+                                          [--compress] [--overwrite]
     flex-orch [CONNECTION] import PATH [--name N] [--on-existing error|skip]
 
 ``CONNECTION`` picks the store as ``Orchestrator()`` does (D11):
@@ -167,7 +168,7 @@ def _run(orch: Any, args: argparse.Namespace, rest: list[str]) -> Any:
     if args.study is not None:
         orch.select_study(args.study)
     params = command_parser(cmd).parse_args(rest)
-    return orch.run_command(cmd.name, _fields(params))
+    return orch.run_command(cmd.name, dict(vars(params)))
 
 
 def command_parser(cmd: Any) -> argparse.ArgumentParser:
@@ -195,10 +196,6 @@ def command_parser(cmd: Any) -> argparse.ArgumentParser:
             kwargs["default"] = argparse.SUPPRESS
         parser.add_argument(flag, **kwargs)
     return parser
-
-
-def _fields(namespace: argparse.Namespace) -> dict[str, Any]:
-    return dict(vars(namespace))
 
 
 def _unwrap(annotation: Any) -> Any:

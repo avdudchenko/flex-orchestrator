@@ -15,7 +15,7 @@ from flex_orchestrator import Orchestrator
 HERE = Path(__file__).parent
 MODEL = HERE.parent / "ro_surrogates"  # the model, its tariff file and its data
 sys.path.insert(0, str(MODEL))
-from example import operating_data, ro_model, sec  # noqa: E402, F401
+from example import KEEP, UNITS, compare, operating_data, ro_model  # noqa: E402, F401
 
 # Fits the two surrogates from the stored data, as the "fits" of a study.
 FITS = [
@@ -30,13 +30,7 @@ FITS = [
     }
 ]
 
-EXPORT = {
-    "include": [
-        "plant.ro.permeate",
-        "plant.ro.power_electrical",
-        "costing.aggregate_operating_cost",
-    ]
-}
+EXPORT = {"include": KEEP}
 
 
 def new_study(name: str) -> Orchestrator:
@@ -45,11 +39,7 @@ def new_study(name: str) -> Orchestrator:
     if name in orch.studies():
         orch.delete_study(name)
     orch.create_study(name)
-    orch.store_data(
-        "ro_operation",
-        operating_data(),
-        units={"permeate": "m^3/hr", "power_electrical": "kW"},
-    )
+    orch.store_data("ro_operation", operating_data(), units=UNITS)
     orch.store_model_spec(
         "base", fo.emit_model(ro_model(), relative_to=MODEL), base_dir=MODEL
     )

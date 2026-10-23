@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from flex_orchestrator.backend.base import StorageBackend, to_rows
+from flex_orchestrator.backend.base import StorageBackend, align, recording, to_rows
 from flex_orchestrator.errors import StorageError, UnitError
 from flex_orchestrator.export.units import UnitMapper, local_name
 
@@ -70,12 +70,7 @@ def qudt_unit(text: str | None, mapper: UnitMapper) -> str | None:
             mapping = None
     if mapping is not None and mapping.verified:
         return mapping.qudt
-    if mapper.resolver is None:
-        return None
-    try:
-        found = mapper.resolver(text)
-    except Exception:
-        return None
+    found = mapper.resolve(text)
     return local_name(found) if found else None
 
 
@@ -92,6 +87,21 @@ def store(
     """Declare and record one dataset as a run of ``study``.
 
     Everything is checked and declared before the run starts.
+
+    Args:
+        backend: The store.
+        study: The ``<s>::data`` study.
+        name: The dataset's name.
+        timestamps: The UTC timestamps, one per row.
+        columns: ``{column: values}``, a value per timestamp (``None`` if
+            missing).
+        units: ``{column: unit as the user wrote it}``; columns left out have
+            none.
+        mapper: Finds each unit's QUDT key.
+        metadata: The run metadata.
+
+    Returns:
+        What was stored.
 
     Raises:
         StorageError: If the table is empty, ``units`` names a column the table
@@ -133,17 +143,12 @@ def store(
         "start": min(timestamps).isoformat(),
         "end": max(timestamps).isoformat(),
     }
-    run_id = backend.start_run(study, metadata)
-    try:
+    with recording(backend, study, metadata) as run_id:
         backend.record(run_id, MANIFEST, manifest)
         for column, values in columns.items():
             backend.record(
                 run_id, column_label(name, column), to_rows(timestamps, values)
             )
-    except BaseException as exc:
-        backend.fail_run(run_id, exc)
-        raise
-    backend.finish_run(run_id)
     return StoredData(name, run_id, list(columns), len(timestamps), keys)
 
 
@@ -155,6 +160,17 @@ def read(
     columns: list[str] | None,
 ) -> tuple[list, dict[str, list[float | None]]]:
     """Read a dataset's columns back, aligned on their timestamps.
+
+    Args:
+        backend: The store.
+        study: The ``<s>::data`` study.
+        run_id: The dataset's run.
+        name: The dataset's name.
+        columns: The columns to read, in order; every column if ``None``.
+
+    Returns:
+        ``(timestamps, {column: values})``, ``None`` where a column has no
+        value at a timestamp.
 
     Raises:
         StorageError: If ``columns`` names a column the dataset doesn't have.
@@ -172,7 +188,4 @@ def read(
         labels[r.label]: dict(r.rows or [])
         for r in backend.records(study, run_id, labels=list(labels))
     }
-    timestamps = sorted({when for rows in by_column.values() for when in rows})
-    return timestamps, {
-        c: [by_column.get(c, {}).get(when) for when in timestamps] for c in wanted
-    }
+    return align(by_column, wanted)

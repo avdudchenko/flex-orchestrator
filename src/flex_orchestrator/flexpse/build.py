@@ -42,6 +42,10 @@ def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
 def with_overrides(spec: dict, overrides: Mapping[str, Any]) -> dict:
     """Return a copy of ``spec`` with one ``fix`` element per override.
 
+    A path whose first part names a ``costing`` element and whose next part is
+    one of its fields (``"costing.energy_prices.electrical"``) edits that
+    field instead: that's how a price is swept.
+
     Args:
         spec: A ``FlowsheetSpec`` as JSON. Not modified.
         overrides: ``{variable path: value}``. The path is a Pyomo ComponentUID
@@ -50,10 +54,6 @@ def with_overrides(spec: dict, overrides: Mapping[str, Any]) -> dict:
             anything a ``fix`` element takes: a number in the variable's own
             units, ``{"value": ..., "units": ...}``, a list with one number per
             time point, or a ``{time index: value}`` mapping.
-
-    A path whose first part names a ``costing`` element and whose next part is
-    one of its fields (``"costing.energy_prices.electrical"``) edits that
-    field instead: that's how a price is swept.
 
     Returns:
         The new spec. Its ``fix`` elements are named ``"override:<path>"``.

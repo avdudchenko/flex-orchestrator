@@ -20,6 +20,7 @@ from flex_orchestrator.fitting.models import FitParams
 from flex_orchestrator.study.config import StudyConfig
 
 DEFAULT_DIR = Path("docs") / "schemas"
+"""Path: Where :func:`write` puts the schemas by default, relative to the repo."""
 
 
 def all_schemas() -> dict[str, dict[str, Any]]:

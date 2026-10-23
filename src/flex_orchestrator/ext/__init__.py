@@ -10,6 +10,7 @@
   ``after_store``, ``on_task_result`` and ``on_study_created``.
 """
 
+import os
 from typing import Any
 
 from flex_orchestrator.ext.commands import (
@@ -28,6 +29,7 @@ from flex_orchestrator.ext.plugins import (
     Plugin,
     installed_plugins,
     load_plugins,
+    orchestrator_class,
 )
 
 
@@ -41,19 +43,24 @@ def create_orchestrator(*args: Any, plugins: Any = None, **kwargs: Any) -> Any:
     Args:
         *args: Passed to the orchestrator (e.g. a backend).
         plugins: :class:`Plugin` objects or installed plugin names.
-        **kwargs: Passed to the orchestrator.
+        **kwargs: Passed to the orchestrator; ``environ`` (``os.environ`` by
+            default) is where ``FLEXORCH_PLUGINS`` and
+            ``FLEXORCH_RAY_ADDRESS`` are read.
+
+    Returns:
+        The orchestrator.
 
     Raises:
         PluginError: If a plugin can't be loaded (see :func:`load_plugins`).
     """
-    from flex_orchestrator.ext.plugins import orchestrator_class
     from flex_orchestrator.orchestrator import BUILTIN_COMMANDS, Orchestrator
 
-    loaded = load_plugins(
-        plugins, environ=kwargs.pop("environ", None), builtin_commands=BUILTIN_COMMANDS
-    )
+    environ = kwargs.pop("environ", None)
+    loaded = load_plugins(plugins, environ=environ, builtin_commands=BUILTIN_COMMANDS)
     cls = orchestrator_class(loaded, Orchestrator)
-    return cls(*args, plugins=loaded, environ={}, **kwargs)
+    # The plugins are loaded: the orchestrator mustn't read the allowlist again.
+    env = {**(os.environ if environ is None else environ), ALLOWLIST_ENV: ""}
+    return cls(*args, plugins=loaded, environ=env, **kwargs)
 
 
 __all__ = [

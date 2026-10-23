@@ -54,16 +54,17 @@ def apply_surrogate(
     units = {e["name"] for e in spec["elements"] if e.get("kind") == "unit"}
     if unit.partition("[")[0] not in units:
         raise SpecError(f"The spec has no unit {unit!r}. Units: {sorted(units)}.")
-    kept = [
+    new = copy.deepcopy(spec)
+    new["elements"] = [
         e
-        for e in spec["elements"]
+        for e in new["elements"]
         if not (
             e.get("kind") == "surrogate"
             and e.get("unit") == unit
             and e.get("relation", DEFAULT_RELATION) == element["relation"]
         )
-    ]
-    return {**copy.deepcopy(spec), "elements": [*copy.deepcopy(kept), element]}
+    ] + [element]
+    return new
 
 
 def swap_surrogate(

@@ -43,6 +43,7 @@ from flex_orchestrator.study.task import (
     SurrogateChoice,
     TaskResult,
     TaskSpec,
+    report,
     run_task,
     study_hooks,
 )
@@ -109,7 +110,25 @@ def execute_study(
     build: Any = None,
     solve: Any = None,
 ) -> StudyRun:
-    """Run a study config: its fits, then every task of its sweeps."""
+    """Run a study config: its fits, then every task of its sweeps.
+
+    Args:
+        orch: The orchestrator.
+        params: The config, and what overrides its execution.
+        progress: Advanced after each fit and task; cancelling it stops the
+            study (and running Ray tasks) at the next check.
+        build: A build hook (callables allowed) over the config's.
+        solve: A solve hook (callables allowed) over the config's.
+
+    Returns:
+        What ran, or with ``dry_run`` the plan.
+
+    Raises:
+        StudyConfigError: If the config doesn't expand (see :func:`expand`).
+        TagExistsError: With ``on_existing: error``, if a tag is stored.
+        HookError: If a hook can't be resolved, or can't run on Ray.
+        CommandCancelled: If ``progress`` is cancelled.
+    """
     with orch._caching_specs():  # every task reads the same few specs
         return _execute(orch, params, progress, build, solve)
 
@@ -144,20 +163,19 @@ def _execute(
     progress.update(done=0, total=len(cfg.fits) + len(tasks), message="fitting")
     for fit in cfg.fits:
         progress.check()
-        run.fits.append(run_fits(orch, fit, Progress(), execution, workers))
+        # Its own counts, but cancelling the study cancels the fit too.
+        run.fits.append(run_fits(orch, fit, progress.child(), execution, workers))
         progress.advance(message="fitted " + ", ".join(run.fits[-1].tags))
     if workers > 1:
         from flex_orchestrator.parallel import run_tasks
 
         run.results = run_tasks(orch, tasks, hooks, execution, workers, progress)
-    for task in tasks if workers == 1 else ():
-        progress.check()
-        result = run_task(orch, task, retries=execution.retries, hooks=hooks)
-        run.results.append(result)
-        orch.on_task_result(result)
-        progress.advance(message=f"{task.tag}: {result.status}")
-        if result.status in ("failed", "error") and execution.on_error == "stop":
-            break
+    else:
+        for task in tasks:
+            progress.check()
+            result = run_task(orch, task, retries=execution.retries, hooks=hooks)
+            if report(orch, progress, execution, run.results, result):
+                break
     orch.events.emit("job_finished", job=run)
     return run
 

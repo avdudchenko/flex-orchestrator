@@ -20,9 +20,6 @@ def _load(name: str) -> dict:
     return json.loads((_DATA / f"{name}.json").read_text(encoding="utf-8"))
 
 
-# A six-hour version of flex-pse 0.2's plant_config_demo.json (schema 0.1.0)
-# with a flat energy price instead of a tariff file, so it builds from any
-# working directory.
 DEMO_SPEC: dict = {
     "schema_version": "0.1.0",
     "name": "demo",
@@ -75,8 +72,10 @@ DEMO_SPEC: dict = {
         {"kind": "objective", "name": "objective"},
     ],
 }
+"""dict: A six-hour version of flex-pse 0.2's ``plant_config_demo.json``
+(schema 0.1.0) with a flat energy price instead of a tariff file, so it builds
+from any working directory."""
 
-# A multilinear surrogate for demo.pump's power relation: 0.6 kWh/m^3, no offset.
 LINEAR_POWER: dict = {
     "surrogate_type": "multilinear",
     "data": {
@@ -85,14 +84,17 @@ LINEAR_POWER: dict = {
         "coefficients": {"intercept": 0.0, "flow_in": 0.6},
     },
 }
+"""dict: A multilinear surrogate for ``demo.pump``'s power relation:
+0.6 kWh/m^3, no offset."""
 
-# Three RO trains as an indexed unit (``p.ro[0..2]``, over the set element
-# ``p.trains = [0, 1, 2]``) with status and startup/shutdown logic; 6 points.
 LOGIC_SPEC: dict = _load("logic_indexed")
+"""dict: Three RO trains as an indexed unit (``p.ro[0..2]``, over the set
+element ``p.trains = [0, 1, 2]``) with status and startup/shutdown logic;
+6 points."""
 
-# A pump with a multilinear surrogate (``coefficient_vars`` indexed by
-# coefficient name) and a battery with a dispatched ``power_charge``; 6 points.
 SURROGATE_DISPATCH_SPEC: dict = _load("surrogate_and_dispatch")
+"""dict: A pump with a multilinear surrogate (``coefficient_vars`` indexed by
+coefficient name) and a battery with a dispatched ``power_charge``; 6 points."""
 
-# A network of two plants (``net.a``, ``net.b``); 24 points.
 NETWORK_SPEC: dict = _load("network_two_plants")
+"""dict: A network of two plants (``net.a``, ``net.b``); 24 points."""

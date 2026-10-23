@@ -46,9 +46,11 @@ def test_an_unknown_snapshot_schema_is_refused():
         read_snapshot(None, {"schema": "flexorch-model/9", "series": []})
 
 
-def test_a_key_named_time_is_refused():
+@pytest.mark.parametrize("keys", [["time", "a"], ["a", "time"]])
+def test_a_key_named_time_is_refused(keys):
+    # Also when it shares its time axis with a key before it.
     with pytest.raises(StorageError, match="can't be named 'time'"):
-        snapshot(ModelData([series("time", [1.0])]))
+        snapshot(ModelData([series(key, [1.0]) for key in keys]))
 
 
 def test_scalars_only_have_no_table():

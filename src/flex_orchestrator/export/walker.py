@@ -178,9 +178,6 @@ class _Timeline:
             return value
         return self.datetime_index[self.positions[value]]
 
-    def position(self, value: Any) -> int:
-        return self.positions[value]
-
 
 def _select(model, keys, include, exclude) -> Iterator[tuple[Any, bool, set | None]]:
     """Yield ``(component, named in keys, only these indices)`` to export."""
@@ -237,7 +234,7 @@ def _export_component(
         return
     mapping = mapper.map(_unit_of(path, elements[0][1]))
 
-    def series(kind, key, index, points, raw_index=()):
+    def series(kind, key, index, points):
         return ExportedSeries(
             key=key,
             kind=kind,
@@ -248,7 +245,7 @@ def _export_component(
             unit_pyomo=mapping.pyomo,
             unit_qudt=mapping.qudt,
             unit_verified=mapping.verified,
-            raw_index=tuple(raw_index),
+            raw_index=tuple(index),
         )
 
     if not component.is_indexed():
@@ -267,7 +264,7 @@ def _export_component(
         for index, data in elements:
             raw = _as_tuple(index)
             key = data.getname(fully_qualified=True, relative_to=model)
-            yield series("scalar", key, raw, [(index, None)], raw)
+            yield series("scalar", key, raw, [(index, None)])
         return
 
     groups: dict[tuple, list[tuple[Any, Any]]] = {}
@@ -277,14 +274,14 @@ def _export_component(
         custom = raw[:time_offset] + raw[time_offset + 1 :]
         groups.setdefault(custom, []).append((index, t))
     for custom, points in groups.items():
-        points.sort(key=lambda point: timeline.position(point[1]))
+        points.sort(key=lambda point: timeline.positions[point[1]])
         key = (
             path
             if not custom
             else path + index_repr(custom[0] if len(custom) == 1 else custom)
         )
         stamped = [(index, timeline.timestamp(t)) for index, t in points]
-        yield series("timeseries", key, custom, stamped, custom)
+        yield series("timeseries", key, custom, stamped)
 
 
 def _time_offset(index_set, timeline) -> int | None:

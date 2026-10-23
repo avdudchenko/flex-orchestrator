@@ -29,7 +29,7 @@ import threading
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal
 
@@ -81,6 +81,12 @@ from flex_orchestrator.specs import (
     to_json_spec,
 )
 
+_VERSION_KEYS = {
+    "flex-orchestrator": "flexorch_version",
+    "flex-pse": "flexpse_version",
+    "acquirium": "acquirium_version",
+}
+"""dict: Distribution -> the run metadata key recording its version."""
 RESULT_KIND = "result"
 MODEL_SPEC = "model_spec"
 SURROGATE_SPEC = "surrogate_spec"
@@ -162,7 +168,7 @@ class StoredResult:
 
 
 @dataclass(eq=False)
-class ResultHandle:
+class ResultHandle(results.ResultReads):
     """A stored result, read lazily from its snapshot (PLAN.md D7).
 
     The snapshot is read the first time values are asked for, then kept.
@@ -223,23 +229,6 @@ class ResultHandle:
         """
         return frames.model_frame(self.data(units), frame or self._orch.frame)
 
-    def to_polars(self, units: Mapping[str, str] | None = None) -> Any:
-        """Return :meth:`to_frame` as a polars DataFrame."""
-        return self.to_frame("polars", units)
-
-    def to_pandas(self, units: Mapping[str, str] | None = None) -> Any:
-        """Return :meth:`to_frame` as a pandas DataFrame."""
-        return self.to_frame("pandas", units)
-
-    def scalars(self, units: Mapping[str, str] | None = None) -> dict[str, Any]:
-        """Return ``{key: value}`` for every scalar."""
-        return {s.key: s.value for s in self.data(units).scalars()}
-
-    @property
-    def units(self) -> dict[str, str | None]:
-        """``{key: Pyomo unit}`` for every stored key."""
-        return {s.key: s.unit_pyomo for s in self.data()}
-
     @property
     def spec_tag(self) -> str | None:
         """The tag of the model spec the result was built from, if recorded."""
@@ -266,12 +255,7 @@ class ResultHandle:
     @property
     def outcome(self) -> SolveOutcome | None:
         """The solve outcome stored with the result, if any."""
-        stored = self._snapshot()[1]
-        if stored is None:
-            return None
-        return SolveOutcome.model_validate(
-            {k: v for k, v in stored.items() if k != "ok"}
-        )
+        return SolveOutcome.from_stored(self._snapshot()[1])
 
 
 class Orchestrator:
@@ -364,11 +348,7 @@ class Orchestrator:
         self.unit_mapper = unit_mapper or UnitMapper(
             resolver=backend.resolve_unit, strict=strict_units
         )
-        if frame not in frames.FRAME_KINDS:
-            raise ValueError(
-                f"frame must be one of {frames.FRAME_KINDS}, not {frame!r}."
-            )
-        self.frame = frame
+        self.frame = frames.check_frame(frame)
         self.allow_delete = allow_delete
         env = os.environ if environ is None else environ
         self.ray_address = ray_address or env.get("FLEXORCH_RAY_ADDRESS") or None
@@ -505,9 +485,9 @@ class Orchestrator:
     def delete_study(self, name: str) -> None:
         """Delete a study and everything stored in it, for good.
 
-        Deletes the study's datasets, results and their declarations in
-        Acquirium (PLAN.md D9). If it is the selected study, none is selected
-        afterwards.
+        Deletes the study and its ledgers (results, datasets, specs and fits)
+        with their declarations in Acquirium (PLAN.md D9). If it is the
+        selected study, none is selected afterwards.
 
         Raises:
             StorageError: If deletion is turned off, or a run in the study is
@@ -529,7 +509,7 @@ class Orchestrator:
             for ledger in present:
                 self.backend.delete_study(ledger)
             self.backend.delete_study(name)
-        cache = getattr(self._call, "specs", None)
+        cache = self._spec_cache
         for key in [k for k in cache or {} if k[0] == name]:
             del cache[key]
         if self._study == name:
@@ -550,6 +530,7 @@ class Orchestrator:
             StorageError: If deletion is turned off, or the item's run is
                 still running.
             TagNotFoundError: If nothing has this kind and tag.
+            ValueError: If ``kind`` isn't one of the kinds above.
         """
         self._check_delete(f"delete {kind} {tag!r}")
         ledger = self._ledger(self.study, _ledger_of(kind))
@@ -560,7 +541,7 @@ class Orchestrator:
                     f"Study {self.study!r} has no stored {kind} {tag!r}."
                 )
             self.backend.delete_runs(ledger, [run.run_id for run in found])
-        cache = getattr(self._call, "specs", None)
+        cache = self._spec_cache
         if cache is not None:
             cache.pop((self.study, kind, tag), None)
         return len(found)
@@ -607,7 +588,8 @@ class Orchestrator:
         Raises:
             TagExistsError: If a model spec with this tag is stored.
             TagNotFoundError: If ``parent`` isn't a stored model spec.
-            SpecError: If the spec is invalid or a referenced file can't be read.
+            SpecError: If the spec or its tag is invalid, or a referenced file
+                can't be read.
         """
         return self._store_spec(
             MODEL_SPEC, tag, spec, parent, base_dir, assets, spec_format, replace
@@ -631,9 +613,13 @@ class Orchestrator:
             spec_format: The format; detected from the spec when omitted.
             replace: Replace a stored spec with this tag (D9).
 
+        Returns:
+            The stored record.
+
         Raises:
             TagExistsError: If a surrogate spec with this tag is stored.
-            SpecError: If the spec is invalid.
+            TagNotFoundError: If ``parent`` isn't a stored surrogate spec.
+            SpecError: If the spec or its tag is invalid.
         """
         return self._store_spec(
             SURROGATE_SPEC, tag, spec, parent, None, (), spec_format, replace
@@ -656,8 +642,17 @@ class Orchestrator:
         return self._read_spec(SURROGATE_SPEC, tag)[0]
 
     def stored_specs(self, kind: SpecKind = MODEL_SPEC) -> list[SpecRecord]:
-        """Return the study's stored specs of one kind, oldest first."""
-        ledger = self._ledger(self.study, LEDGERS[_spec_kind(kind)])
+        """Return the study's stored specs of one kind, oldest first.
+
+        Args:
+            kind: ``"model_spec"`` or ``"surrogate_spec"``.
+
+        Raises:
+            ValueError: If ``kind`` isn't a spec kind.
+        """
+        ledger = self._ledger(
+            self.study, _ledger_of(kind, (MODEL_SPEC, SURROGATE_SPEC))
+        )
         return [
             spec_store.read(self.backend, ledger, run.run_id)[0]
             for run in self.backend.runs(
@@ -765,21 +760,33 @@ class Orchestrator:
             validate=False,
             assets=refs,
         )
-        ledger = self._ledger(self.study, LEDGERS[kind])
-
-        def write() -> _Written:
-            metadata = {**self._metadata(tag, kind), **record.metadata()}
-            run_id = spec_store.write(self.backend, ledger, record, files, metadata)
-            return _Written(run_id)
-
-        self._guarded(kind, tag, replace, write)
-        cache = getattr(self._call, "specs", None)
+        self._write_spec(record, files, replace)
+        cache = self._spec_cache
         if cache is not None:
             cache[(self.study, kind, tag)] = (record, files)
         return record
 
+    def _write_spec(
+        self, record: SpecRecord, files: Mapping[str, bytes], replace: bool = False
+    ) -> str:
+        """Store a spec record and its files under the D9 rules; return the run."""
+        ledger = self._ledger(self.study, LEDGERS[record.kind])
+
+        def write() -> _Written:
+            metadata = {**self._metadata(record.tag, record.kind), **record.metadata()}
+            return _Written(
+                spec_store.write(self.backend, ledger, record, files, metadata)
+            )
+
+        return self._guarded(record.kind, record.tag, replace, write).run_id
+
+    @property
+    def _spec_cache(self) -> dict | None:
+        """The specs read in this thread's :meth:`_caching_specs` block, if any."""
+        return getattr(self._call, "specs", None)
+
     def _read_spec(self, kind: str, tag: str) -> tuple[SpecRecord, dict[str, bytes]]:
-        cache = getattr(self._call, "specs", None)
+        cache = self._spec_cache
         key = (self.study, kind, tag)
         if cache is not None and key in cache:
             return cache[key]
@@ -798,7 +805,7 @@ class Orchestrator:
         deleted one is dropped, so the cache stays what the store holds as long
         as this orchestrator is the only writer, which a study run assumes.
         """
-        previous = getattr(self._call, "specs", None)
+        previous = self._spec_cache
         if previous is None:
             self._call.specs = {}
         try:
@@ -851,6 +858,7 @@ class Orchestrator:
 
         Raises:
             TagExistsError: If the dataset exists and ``replace`` is false.
+            SpecError: If ``name`` isn't a valid tag.
             StorageError: If the table can't be stored (no datetimes, repeated
                 timestamps, a non-numeric column, an empty table).
 
@@ -926,11 +934,12 @@ class Orchestrator:
         timestamps, values = datasets.read(
             self.backend, ledger, run.run_id, name, columns
         )
+        lo = None if start is None else to_utc(start)
+        hi = None if end is None else to_utc(end)
         keep = [
             i
             for i, when in enumerate(timestamps)
-            if (start is None or when >= to_utc(start))
-            and (end is None or when <= to_utc(end))
+            if (lo is None or when >= lo) and (hi is None or when <= hi)
         ]
         return frames.from_columns(
             [timestamps[i] for i in keep],
@@ -996,6 +1005,7 @@ class Orchestrator:
             TagExistsError: If a result with this tag is running or succeeded
                 (and ``replace`` is false).
             TagNotFoundError: If ``spec`` isn't a stored model spec.
+            SpecError: If ``tag`` isn't a valid tag.
             ExportError, StorageError, UnitError: If the values can't be
                 exported or stored.
         """
@@ -1060,6 +1070,7 @@ class Orchestrator:
         Raises:
             TagExistsError: If a result with this tag is running or succeeded
                 (and ``replace`` is false).
+            SpecError: If ``tag`` isn't a valid tag.
             ExportError, StorageError, UnitError: If the values can't be
                 stored.
         """
@@ -1118,6 +1129,7 @@ class Orchestrator:
         Raises:
             TagExistsError: If a result with this tag is running or succeeded
                 (and ``replace`` is false).
+            SpecError: If ``tag`` isn't a valid tag.
         """
         self._check_new(tag, RESULT_KIND, replace)
         hook = self.registry.resolve_ref(solve or self.hooks.solve, "solve")
@@ -1550,7 +1562,7 @@ class Orchestrator:
                 stored = write()
             finally:
                 self._call.extra = None
-            ok = stored.run_id is not None and getattr(stored, "ok", True)
+            ok = getattr(stored, "ok", True)
             if ok:
                 self._settle(kind, tag, stored.run_id, replace)
         if ok:
@@ -1679,9 +1691,9 @@ class Orchestrator:
         if kind == RESULT_KIND:
             hooks = self.hooks.merged(getattr(self._call, "hooks", None) or HookSet())
             metadata["flexorch_hooks"] = {
-                f.name: _hook_name(getattr(hooks, f.name))
-                for f in fields(hooks)
-                if getattr(hooks, f.name) is not None
+                kind: _hook_name(ref)
+                for kind, ref in hooks.slots().items()
+                if ref is not None
             } or None
         if self.connection is not None:
             metadata["flexorch_connection"] = self.connection.metadata()
@@ -1742,14 +1754,6 @@ def _ledger_names() -> list[str]:
     return list(dict.fromkeys(LEDGERS.values()))
 
 
-def _spec_kind(kind: str) -> SpecKind:
-    if kind not in (MODEL_SPEC, SURROGATE_SPEC):
-        raise ValueError(
-            f"kind must be {MODEL_SPEC!r} or {SURROGATE_SPEC!r}, not {kind!r}."
-        )
-    return kind  # type: ignore[return-value]
-
-
 def _check_outcome(outcome: Any) -> None:
     if outcome is not None and not isinstance(outcome, SolveOutcome):
         raise TypeError(
@@ -1778,9 +1782,9 @@ def _hook_name(ref: Any) -> str:
     return hook_ref(ref) or f"<{getattr(ref, '__qualname__', type(ref).__name__)}>"
 
 
-def _ledger_of(kind: str) -> str:
-    if kind not in LEDGERS:
-        raise ValueError(f"kind must be one of {sorted(LEDGERS)}, not {kind!r}.")
+def _ledger_of(kind: str, allowed: Iterable[str] = LEDGERS) -> str:
+    if kind not in allowed:
+        raise ValueError(f"kind must be one of {sorted(allowed)}, not {kind!r}.")
     return LEDGERS[kind]
 
 

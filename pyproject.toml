@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "flex-orchestrator"
 version = "0.1.0.dev0"
 description = "Run, store and query flex-pse studies on an Acquirium experiment ledger"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",

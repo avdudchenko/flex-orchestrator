@@ -41,7 +41,6 @@ STUDY = {
 }
 
 if __name__ == "__main__":
-    orch = new_study("ro_cases")
-    orch.execute_study(STUDY)
-    report(orch)
-    orch.close()
+    with new_study("ro_cases") as orch:
+        orch.execute_study(STUDY)
+        report(orch)

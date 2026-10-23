@@ -268,7 +268,7 @@
     },
     "Variant": {
       "additionalProperties": false,
-      "description": "One fit of a :class:`FitParams` with ``variants``; set fields override the base.\n\nAttributes:\n    name: Rendered into the tag template as ``{name}``.",
+      "description": "One fit of a :class:`FitParams` with ``variants``; set fields override the base.\n\nAttributes:\n    name: Rendered into the tag template as ``{name}``.\n\nThe other fields are those of :class:`FitParams`; ``None`` keeps the base's.",
       "properties": {
         "X": {
           "anyOf": [

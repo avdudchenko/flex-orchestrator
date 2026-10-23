@@ -21,7 +21,8 @@ Timestamps are timezone-aware UTC datetimes on the way out; naive datetimes
 going in are taken as UTC.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -217,7 +218,8 @@ class StreamStore(Protocol):
 
     Streams outside the experiment ledger (a plant historian's, say) are what
     the ``ref_uris``, ``resolve`` and ``sparql`` fit selectors read (D19). The
-    Acquirium backend has them; the memory backend doesn't.
+    Acquirium backend has them; the memory backend doesn't. This protocol
+    documents the methods; the selectors check for them with ``hasattr``.
     """
 
     def stream_rows(self, ref: str, start: Any = None, end: Any = None) -> list[Row]:
@@ -274,3 +276,71 @@ def to_rows(timestamps: Sequence[Any], values: Sequence[float | None]) -> list[R
         for when, value in zip(timestamps, values, strict=True)
         if value is not None
     ]
+
+
+def align(
+    by_column: Mapping[str, Mapping[datetime, Any]], columns: Sequence[str]
+) -> tuple[list[datetime], dict[str, list[Any]]]:
+    """Put columns of ``{time: value}`` on the sorted union of their timestamps.
+
+    Args:
+        by_column: ``{column: {time: value}}``.
+        columns: The columns to return, in order; one missing from
+            ``by_column`` is all ``None``.
+
+    Returns:
+        ``(timestamps, {column: values})``, ``None`` where a column has no value.
+
+    Example:
+        >>> t1, t2 = datetime(2025, 1, 1, 1), datetime(2025, 1, 1, 2)
+        >>> align({"a": {t2: 2.0}, "b": {t1: 1.0}}, ["a", "b"])[1]
+        {'a': [None, 2.0], 'b': [1.0, None]}
+    """
+    timestamps = sorted({when for values in by_column.values() for when in values})
+    return timestamps, {
+        column: [by_column.get(column, {}).get(when) for when in timestamps]
+        for column in columns
+    }
+
+
+def qudt_key(uri: str) -> str:
+    """Return the QUDT key a unit URI ends in (its last path part).
+
+    Example:
+        >>> qudt_key("http://qudt.org/vocab/unit/KiloW-HR")
+        'KiloW-HR'
+    """
+    return uri.rsplit("/", 1)[-1]
+
+
+@contextmanager
+def recording(
+    backend: StorageBackend, study: str, metadata: Mapping[str, Any]
+) -> Iterator[str]:
+    """Start a run, yield its id, and finish it; fail it if the block raises.
+
+    Args:
+        backend: The store.
+        study: The study the run belongs to; its variables must be declared.
+        metadata: The run metadata.
+
+    Yields:
+        The run id, for :meth:`StorageBackend.record`.
+
+    Example:
+        >>> from flex_orchestrator.backend import MemoryBackend
+        >>> backend = MemoryBackend()
+        >>> backend.define_study("s")
+        >>> _ = backend.declare("s", "x", role="output", kind="scalar")
+        >>> with recording(backend, "s", {}) as run_id:
+        ...     backend.record(run_id, "x", 1.0)
+        >>> backend.runs("s")[0].status
+        'succeeded'
+    """
+    run_id = backend.start_run(study, metadata)
+    try:
+        yield run_id
+    except BaseException as exc:
+        backend.fail_run(run_id, exc)
+        raise
+    backend.finish_run(run_id)

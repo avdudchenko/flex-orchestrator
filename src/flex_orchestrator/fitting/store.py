@@ -17,13 +17,19 @@ from typing import Any
 
 import polars as pl
 
+from flex_orchestrator.backend.base import recording
 from flex_orchestrator.orchestrator import FIT_KIND, LEDGERS, _Written
 
 FIT_PARAMS = "fit_params"
+"""str: The label of a fit's JSON input: the fit as planned."""
 TRAINING_DATA = "training_data"
+"""str: The label of a fit's JSON input: the data it was trained on."""
 FIT_RESULT = "fit_result"
+"""str: The label of a fit's JSON output: coefficients, metrics, diagnostics."""
 FIT_SERIES = "fit_series"
+"""str: The label of a fit's optional table output: actual, fitted, residual."""
 LABELS = (FIT_PARAMS, TRAINING_DATA, FIT_RESULT, FIT_SERIES)
+"""tuple[str, ...]: Every label of a fit run, in the order it is recorded."""
 
 
 def write(
@@ -52,17 +58,11 @@ def write(
         backend.declare(ledger, FIT_RESULT, role="output", kind="json")
         if FIT_SERIES in records:
             backend.declare(ledger, FIT_SERIES, role="output", kind="table")
-        run_id = backend.start_run(
-            ledger, {**orch._metadata(tag, FIT_KIND), **metadata}
-        )
-        try:
+        run_metadata = {**orch._metadata(tag, FIT_KIND), **metadata}
+        with recording(backend, ledger, run_metadata) as run_id:
             for label in LABELS:
                 if label in records:
                     backend.record(run_id, label, records[label])
-        except BaseException as exc:
-            backend.fail_run(run_id, exc)
-            raise
-        backend.finish_run(run_id)
         return _Written(run_id)
 
     return orch._guarded(FIT_KIND, tag, replace, store).run_id

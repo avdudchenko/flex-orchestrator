@@ -11,6 +11,7 @@ doesn't look the unit text up again for every stream it registers.
 """
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import polars as pl
@@ -20,15 +21,19 @@ from flex_orchestrator.backend.base import (
     FileValue,
     Record,
     Role,
+    Row,
     Run,
     RunStatus,
     Variable,
     VariableKind,
+    qudt_key,
+    to_rows,
     to_utc,
 )
 from flex_orchestrator.errors import StorageError
 
 QUDT_UNIT = "http://qudt.org/vocab/unit/"
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 _QUDT_SCHEMA = "http://qudt.org/schema/qudt/"
 _BRICK_REF = "https://brickschema.org/schema/Brick/ref#"
 _ACQ = "urn:acquirium#"
@@ -73,6 +78,8 @@ class AcquiriumBackend:
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
                 return False
+            raise StorageError(f"Acquirium: {exc}") from exc
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
             raise StorageError(f"Acquirium: {exc}") from exc
         return True
 
@@ -172,7 +179,10 @@ class AcquiriumBackend:
             Run(r.run_id, r.status, dict(r.metadata), r.started_at, r.error)
             for r in _call(selected.all)
         ]
-        return sorted(found, key=lambda run: run.started_at)
+        # A run without a start time (not expected from Acquirium) sorts last.
+        return sorted(
+            found, key=lambda run: (run.started_at is None, run.started_at or _EPOCH)
+        )
 
     def variables(self, study: str) -> list[Variable]:
         """Return every variable declared in the study."""
@@ -190,7 +200,7 @@ class AcquiriumBackend:
         missing = [run_id for run_id in run_ids if run_id not in found]
         if missing:
             raise StorageError(f"Study {study!r} has no run {missing[0]!r}.")
-        _call(handle.client.delete_experiments, list(run_ids))
+        _call(handle.client.delete_experiments, list(dict.fromkeys(run_ids)))
 
     def delete_study(self, name: str) -> None:
         """Delete a study, its declarations and every run."""
@@ -236,9 +246,7 @@ class AcquiriumBackend:
 
     # The general store: streams outside the experiment ledger (D19 selectors).
 
-    def stream_rows(
-        self, ref: str, start: Any = None, end: Any = None
-    ) -> list[tuple[Any, float]]:
+    def stream_rows(self, ref: str, start: Any = None, end: Any = None) -> list[Row]:
         """Return a stream's samples, oldest first, as UTC ``(time, value)`` rows.
 
         Args:
@@ -254,13 +262,7 @@ class AcquiriumBackend:
         )
         if frame.is_empty():
             return []
-        return [
-            (to_utc(when), value)
-            for when, value in zip(
-                frame["ts"].to_list(), frame["value"].to_list(), strict=True
-            )
-            if value is not None
-        ]
+        return to_rows(frame["ts"].to_list(), frame["value"].to_list())
 
     def sparql_select(self, query: str) -> dict[str, Any]:
         """Run a read-only SPARQL query; return ``{"columns", "rows"}``."""
@@ -294,7 +296,7 @@ SELECT ?ref ?name ?label ?unit WHERE {{
             found["name"] = found["name"] or name
             found["label"] = found["label"] or label
             if unit and not found["unit"]:
-                found["unit"] = unit.rsplit("/", 1)[-1]
+                found["unit"] = qudt_key(unit)
         return info
 
     def find_streams(self, text: str) -> list[dict[str, Any]]:

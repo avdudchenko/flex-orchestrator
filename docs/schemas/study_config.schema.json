@@ -123,7 +123,7 @@
     },
     "Execution": {
       "additionalProperties": false,
-      "description": "How tasks run (D13).\n\n``max_workers: 1`` (the default) runs the tasks one after another in this\nprocess. More than 1 runs them on Ray: a local Ray started for this\nprocess (``namespace=\"flexorch\"``), the one already connected, or the\ncluster at ``ray_address``. Either way the main process stores every\nresult, so workers never hold database credentials.\n\nAttributes:\n    max_workers: Tasks run at once.\n    ray_address: A Ray cluster, e.g. ``\"ray://tenant-ray-head:10001\"``;\n        local Ray if ``None``. Its workers need flex-orchestrator and the\n        hooks' modules installed.\n    resources: What each task reserves on Ray.\n    max_calls: Restart a Ray worker process after this many tasks, to\n        keep memory bounded; ``None`` never restarts.\n    task_timeout_s: A task's time limit on Ray, counted from when it's\n        submitted, so it includes starting a worker (a few seconds the\n        first time). A task that runs over is killed and stored as a failed\n        result (``termination: timeout``); it isn't retried. Two hours by\n        default; ``None`` means no limit. In-process the limit is recorded\n        but not enforced.\n    retries: How many times a task is tried again when building raises,\n        the solve hook raises, or its Ray worker dies.\n    on_error: Go on with the other tasks after one fails (``continue``) or\n        stop (``stop``); on Ray, ``stop`` cancels the tasks still running.",
+      "description": "How tasks run (D13).\n\n``max_workers: 1`` (the default) runs the tasks one after another in this\nprocess. More than 1 runs them on Ray: a local Ray started for this\nprocess (``namespace=\"flexorch\"``), the one already connected, or the\ncluster at ``ray_address``. Either way the main process stores every\nresult, so workers never hold database credentials.\n\nAttributes:\n    max_workers: Tasks run at once.\n    ray_address: A Ray cluster, e.g. ``\"ray://tenant-ray-head:10001\"``;\n        local Ray if ``None``. Its workers need flex-orchestrator and the\n        hooks' modules installed.\n    resources: What each task reserves on Ray.\n    max_calls: Restart a Ray worker process after this many tasks, to\n        keep memory bounded; ``None`` never restarts.\n    task_timeout_s: A task's time limit on Ray, counted from when it's\n        submitted, so it includes starting a worker (a few seconds the\n        first time). A task that runs over is killed and stored as a failed\n        result (``termination: timeout``); it isn't retried. Two hours by\n        default; ``None`` means no limit. In-process it is not enforced.\n    retries: How many times a task is built and solved again when building\n        or exporting raises, the solve hook raises, or its Ray worker dies.\n        A task whose spec or result can't be stored isn't retried.\n    on_error: Go on with the other tasks after one fails (``continue``) or\n        stop (``stop``); on Ray, ``stop`` cancels the tasks still running.",
       "properties": {
         "max_calls": {
           "anyOf": [
@@ -406,7 +406,7 @@
     },
     "HooksConfig": {
       "additionalProperties": false,
-      "description": "Hooks for the study's tasks: import strings or registered names (D1).\n\nUnset slots use the orchestrator's hooks; hooks passed to\n``execute_study`` win over these.",
+      "description": "Hooks for the study's tasks: import strings or registered names (D1).\n\nUnset slots use the orchestrator's hooks; hooks passed to\n``execute_study`` win over these.\n\nAttributes:\n    build: The build hook.\n    solve: The solve hook.\n    apply_surrogate: Applies a surrogate sweep's surrogates to the spec.\n    swap_surrogate: Swaps a surrogate on a live model.\n    time_sets: Names a built model's time Sets for the exporter.\n    configure: Sets a configuration sweep's options in the spec.",
       "properties": {
         "apply_surrogate": {
           "anyOf": [
@@ -910,7 +910,7 @@
     },
     "Variant": {
       "additionalProperties": false,
-      "description": "One fit of a :class:`FitParams` with ``variants``; set fields override the base.\n\nAttributes:\n    name: Rendered into the tag template as ``{name}``.",
+      "description": "One fit of a :class:`FitParams` with ``variants``; set fields override the base.\n\nAttributes:\n    name: Rendered into the tag template as ``{name}``.\n\nThe other fields are those of :class:`FitParams`; ``None`` keeps the base's.",
       "properties": {
         "X": {
           "anyOf": [

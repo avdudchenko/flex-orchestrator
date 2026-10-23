@@ -15,6 +15,7 @@ built-in) claim the same command or hook name, or both provide an
 orchestrator subclass.
 """
 
+import operator
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -25,11 +26,15 @@ from typing import Any
 from flex_orchestrator.errors import PluginError
 from flex_orchestrator.ext.commands import Command
 from flex_orchestrator.ext.events import EVENTS
+from flex_orchestrator.hooks import HOOK_KINDS
 
 PLUGIN_API_VERSION = "1.0.0"
 """str: The plugin API's version (semver, separate from the package version)."""
 ENTRY_POINT_GROUP = "flex_orchestrator.plugins"
+"""str: The entry-point group installed plugins register under."""
 ALLOWLIST_ENV = "FLEXORCH_PLUGINS"
+"""str: The environment variable listing the installed plugins to enable,
+comma-separated (installed plugins are off unless listed)."""
 
 
 @dataclass(frozen=True)
@@ -174,17 +179,19 @@ def version_in_range(version: str, spec: str) -> bool:
         if match is None:
             raise PluginError(f"Can't read version range {spec!r} (at {clause!r}).")
         op, want = match.group(1) or "==", _parts(match.group(2))
-        ok = {
-            ">=": have >= want,
-            "<=": have <= want,
-            ">": have > want,
-            "<": have < want,
-            "==": have == want,
-            "!=": have != want,
-        }[op]
-        if not ok:
+        if not _OPS[op](have, want):
             return False
     return True
+
+
+_OPS = {
+    ">=": operator.ge,
+    "<=": operator.le,
+    ">": operator.gt,
+    "<": operator.lt,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
 
 
 def _parts(version: str) -> tuple[int, int, int]:
@@ -266,8 +273,6 @@ def hook_sets(plugin: Plugin) -> dict[str, dict[str, str]]:
 
     A bare import string is registered for every hook kind.
     """
-    from flex_orchestrator.hooks import HOOK_KINDS
-
     sets = {}
     for name, refs in plugin.hooks.items():
         if isinstance(refs, str):

@@ -249,6 +249,14 @@ def test_a_plugin_subclass_needs_create_orchestrator(memory_backend):
     assert type(orch) is Stamped
 
 
+def test_create_orchestrator_reads_the_ray_address(memory_backend):
+    env = {"FLEXORCH_RAY_ADDRESS": "ray://tenant:1"}
+    assert create_orchestrator(memory_backend, environ=env).ray_address == (
+        "ray://tenant:1"
+    )
+    assert create_orchestrator(memory_backend, environ={}).ray_address is None
+
+
 # Events
 
 

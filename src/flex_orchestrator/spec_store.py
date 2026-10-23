@@ -14,7 +14,7 @@ referenced by many specs is stored once.
 from collections.abc import Mapping
 from typing import Any
 
-from flex_orchestrator.backend.base import FileValue, StorageBackend
+from flex_orchestrator.backend.base import FileValue, StorageBackend, recording
 from flex_orchestrator.errors import SpecError
 from flex_orchestrator.specs import SpecRecord
 
@@ -41,15 +41,10 @@ def write(
     backend.declare(ledger, SPEC_RECORD, role="input", kind="json")
     for name in files:
         backend.declare(ledger, name, role="input", kind="file")
-    run_id = backend.start_run(ledger, metadata)
-    try:
+    with recording(backend, ledger, metadata) as run_id:
         backend.record(run_id, SPEC_RECORD, record.model_dump(mode="json"))
         for name, data in files.items():
             backend.record(run_id, name, FileValue(name.rpartition("/")[2], data))
-    except BaseException as exc:
-        backend.fail_run(run_id, exc)
-        raise
-    backend.finish_run(run_id)
     return run_id
 
 
@@ -57,6 +52,11 @@ def read(
     backend: StorageBackend, ledger: str, run_id: str
 ) -> tuple[SpecRecord, dict[str, bytes]]:
     """Read a stored spec and its files back, checking the hash.
+
+    Args:
+        backend: The store.
+        ledger: The ``<s>::specs`` study.
+        run_id: The spec's run.
 
     Returns:
         The record and ``{stored name: bytes}``.

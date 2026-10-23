@@ -65,6 +65,13 @@ def test_predict_surrogate():
     assert predict_surrogate(constant, X[["a"]]) == [3.0, 6.0]
     with pytest.raises(FitError, match="one input column"):
         predict_surrogate(constant, X)
+    for coefficients in ({}, {"a": 1.0, "b": 2.0}):
+        bad = {
+            "surrogate_type": "constant_intensity",
+            "data": {"coefficients": coefficients},
+        }
+        with pytest.raises(FitError, match="one coefficient"):
+            predict_surrogate(bad, X[["a"]])
     with pytest.raises(FitError, match="needs column 'c'"):
         predict_surrogate(
             {"surrogate_type": "multilinear", "data": {"coefficients": {"c": 1}}}, X

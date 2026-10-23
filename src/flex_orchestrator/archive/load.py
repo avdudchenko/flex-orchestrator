@@ -81,7 +81,7 @@ def decode_values(file: ResultFile) -> ModelData:
 
 
 @dataclass(eq=False)
-class LoadedResult:
+class LoadedResult(results.ResultReads):
     """A result read from an export file; works like a ``ResultHandle``, offline.
 
     Attributes:
@@ -118,12 +118,7 @@ class LoadedResult:
     @property
     def outcome(self) -> SolveOutcome | None:
         """How the solve ended."""
-        stored = self.file.solve_outcome
-        if stored is None:
-            return None
-        return SolveOutcome.model_validate(
-            {k: v for k, v in stored.items() if k != "ok"}
-        )
+        return SolveOutcome.from_stored(self.file.solve_outcome)
 
     def data(self, units: Mapping[str, str] | None = None) -> ModelData:
         """Return the values, converted to ``units`` if given (see ``ResultHandle``)."""
@@ -135,23 +130,6 @@ class LoadedResult:
     ) -> Any:
         """Return the timeseries as one table, a column per key."""
         return frames.model_frame(self.data(units), frame)
-
-    def to_polars(self, units: Mapping[str, str] | None = None) -> Any:
-        """Return :meth:`to_frame` as a polars DataFrame."""
-        return self.to_frame("polars", units)
-
-    def to_pandas(self, units: Mapping[str, str] | None = None) -> Any:
-        """Return :meth:`to_frame` as a pandas DataFrame."""
-        return self.to_frame("pandas", units)
-
-    def scalars(self, units: Mapping[str, str] | None = None) -> dict[str, Any]:
-        """Return ``{key: value}`` for every scalar."""
-        return {s.key: s.value for s in self.data(units).scalars()}
-
-    @property
-    def units(self) -> dict[str, str | None]:
-        """``{key: Pyomo unit}`` for every key."""
-        return {s.key: s.unit_pyomo for s in self.data()}
 
 
 def load_result(path: str | os.PathLike[str]) -> LoadedResult:

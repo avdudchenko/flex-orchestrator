@@ -26,11 +26,13 @@ from typing import Any, Literal, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 
+from flex_orchestrator.backend.base import recording
 from flex_orchestrator.errors import CommandCancelled, CommandError
 
 COMMANDS_LEDGER = "flexorch::commands"
 """str: The backend study every command call is recorded in."""
 COMMAND_KIND = "command"
+"""str: The ``flexorch_kind`` metadata of a command run."""
 PARAMS = "params"
 """str: The label of a command run's JSON input holding its parameters."""
 RESULT = "result"
@@ -224,6 +226,23 @@ class Progress:
         """Ask the command to stop at its next :meth:`check`."""
         self._cancelled.set()
 
+    def child(self) -> "Progress":
+        """Return a :class:`Progress` with its own counts that shares this one's cancel.
+
+        For a step that reports its own progress, such as the fits a study
+        runs first: cancelling either cancels both.
+
+        Example:
+            >>> parent = Progress()
+            >>> step = parent.child()
+            >>> parent.cancel()
+            >>> step.cancelled
+            True
+        """
+        child = Progress()
+        child._cancelled = self._cancelled
+        return child
+
     @property
     def cancelled(self) -> bool:
         """Whether :meth:`cancel` was called."""
@@ -322,8 +341,6 @@ class CommandRegistry:
 
 def to_json(value: Any) -> Any:
     """Return ``value`` as plain JSON: models dumped, other objects as strings."""
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
     return json.loads(json.dumps(value, default=_default))
 
 
@@ -358,13 +375,8 @@ def record_call(
     backend.define_study(COMMANDS_LEDGER)
     backend.declare(COMMANDS_LEDGER, PARAMS, role="input", kind="json")
     backend.declare(COMMANDS_LEDGER, RESULT, role="output", kind="json")
-    run_id = backend.start_run(COMMANDS_LEDGER, metadata)
-    try:
+    with recording(backend, COMMANDS_LEDGER, metadata) as run_id:
         backend.record(run_id, PARAMS, params.model_dump(mode="json"))
         result = run()
         backend.record(run_id, RESULT, to_json(result))
-    except BaseException as exc:
-        backend.fail_run(run_id, exc)
-        raise
-    backend.finish_run(run_id)
     return result

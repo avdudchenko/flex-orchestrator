@@ -54,3 +54,9 @@ def test_a_study_made_elsewhere_is_found():
     )
     backend = AcquiriumBackend(client)
     assert backend.has_study("s") and backend._study("s") is found
+
+
+def test_connection_errors_while_looking_a_study_up_become_storage_errors():
+    backend = AcquiriumBackend(fake_client(requests.ConnectionError("refused")))
+    with pytest.raises(StorageError, match="refused"):
+        backend.has_study("s")
