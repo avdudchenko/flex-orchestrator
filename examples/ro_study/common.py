@@ -33,9 +33,12 @@ FITS = [
 EXPORT = {"include": KEEP}
 
 
-def new_study(name: str) -> Orchestrator:
-    """Open the local store with a fresh study holding the data and base spec."""
-    orch = Orchestrator(data_dir=HERE / ".flexorch")
+def new_study(name: str, orch: Orchestrator | None = None) -> Orchestrator:
+    """Start a fresh study holding the data and base spec.
+
+    In ``orch``, or in the local store, opened here, if it's ``None``.
+    """
+    orch = orch or Orchestrator(data_dir=HERE / ".flexorch")
     if name in orch.studies():
         orch.delete_study(name)
     orch.create_study(name)
