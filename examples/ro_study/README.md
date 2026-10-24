@@ -14,6 +14,7 @@ operating data and the emitted base spec (`new_study`), the surrogate fits
 | [`sweep_configuration.py`](sweep_configuration.py) | `configuration_option`: the feed's `max_withdrawal` | 160, 180, 200 m³/hr |
 | [`sweep_nested.py`](sweep_nested.py) | surrogate × withdrawal (`combine: product`); stores the full model and exports the study | 2 × 3 |
 | [`sweep_cases.py`](sweep_cases.py) | `cases`: chosen combinations | 3 named cases |
+| [`store_on_disk.py`](store_on_disk.py) | `sweep_surrogates` stored in a folder on disk (`FileBackend`, no Acquirium), then read back by a new orchestrator | 2 |
 | [`compare_ray.py`](compare_ray.py) | `sweep_nested` over a month, run in-process and then on Ray with half the cores, timed | 2 × 12 |
 
 ```

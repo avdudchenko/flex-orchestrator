@@ -162,13 +162,18 @@ def acquirium_local(acquirium_dir):
 @pytest.fixture(
     params=[
         pytest.param("memory", marks=pytest.mark.unit),
+        pytest.param("files", marks=pytest.mark.unit),
         pytest.param("acquirium", marks=pytest.mark.component),
     ]
 )
 def backend(request):
-    """Each backend in turn: memory (unit tier) and Acquirium (component tier)."""
+    """Each backend in turn: memory and files (unit tier), Acquirium (component)."""
     if request.param == "memory":
         return request.getfixturevalue("memory_backend")
+    if request.param == "files":
+        from flex_orchestrator.backend import FileBackend
+
+        return FileBackend(request.getfixturevalue("tmp_path_factory").mktemp("files"))
     from flex_orchestrator.backend import AcquiriumBackend
 
     return AcquiriumBackend(request.getfixturevalue("acquirium_local"))

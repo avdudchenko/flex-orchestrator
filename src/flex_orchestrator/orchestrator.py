@@ -18,7 +18,9 @@ Commands (D18) extend it: ``execute_study`` and ``fit_surrogate`` are built in,
 plugins add more, and every call is recorded in ``flexorch::commands``.
 
 Without a backend, the orchestrator connects to Acquirium itself, in one of
-the D11 modes (:mod:`flex_orchestrator.connection`).
+the D11 modes (:mod:`flex_orchestrator.connection`). To keep studies in a
+folder on disk with no Acquirium, pass a
+:class:`~flex_orchestrator.backend.FileBackend`.
 """
 
 import copy
@@ -272,9 +274,11 @@ class Orchestrator:
     - ``Orchestrator(acquirium_url="http://acquirium:8000")``: a running one.
 
     Args:
-        backend: The store, e.g. :class:`~flex_orchestrator.backend.MemoryBackend`
-            or :class:`~flex_orchestrator.backend.AcquiriumBackend`. Leave it
-            out to connect with the arguments below.
+        backend: The store, e.g. :class:`~flex_orchestrator.backend.FileBackend`
+            (a folder on disk, no Acquirium),
+            :class:`~flex_orchestrator.backend.MemoryBackend` or
+            :class:`~flex_orchestrator.backend.AcquiriumBackend`. Leave it out
+            to connect to Acquirium with the arguments below.
         study: A study to select; it must exist.
         data_dir: The managed Acquirium's directory (modes 1 and 2).
         db: A Postgres URL without a password (mode 2).

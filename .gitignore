@@ -14,3 +14,4 @@ docs/_build/
 .claude/
 .flexorch/
 examples/ro_study/export/
+examples/ro_study/on_disk/

@@ -161,6 +161,23 @@ def test_the_real_orchestrator_factory(monkeypatch):
     }
 
 
+def test_files_runs_on_a_folder_with_no_acquirium(tmp_path, capsys):
+    from flex_orchestrator import Orchestrator
+    from flex_orchestrator.backend import FileBackend
+
+    with Orchestrator(FileBackend(tmp_path / "a"), environ={}) as orch:
+        orch.create_study("s")
+        orch.store_model_spec("base", {"value": 1.0})
+    folder, copy = str(tmp_path / "e"), str(tmp_path / "b")
+    assert run(capsys, "--files", str(tmp_path / "a"), "export", "s", folder)[0] == 0
+    assert run(capsys, "--files", copy, "import", folder)[0] == 0
+    with Orchestrator(FileBackend(copy), study="s", environ={}) as orch:
+        assert orch.model_spec("base").spec == {"value": 1.0}
+    with pytest.raises(SystemExit):
+        cli.main(["--files", copy, "--data-dir", "d", "commands"])
+    assert "takes no --data-dir" in capsys.readouterr().err
+
+
 class Awkward(BaseModel):
     either: int | str = 0
     pairs: list[dict] = []

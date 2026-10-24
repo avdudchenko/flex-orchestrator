@@ -407,7 +407,7 @@ def test_invalid_files_in_an_export(study, tmp_path):
 
 def test_a_locked_export_folder_is_renamed_once_let_go(study, tmp_path, monkeypatch):
     # On Windows an antivirus can hold a just-written file for a moment.
-    from flex_orchestrator.archive import export as module
+    from flex_orchestrator.backend import files as module
 
     real, calls = module.os.replace, []
 

@@ -62,6 +62,7 @@ source_modules =
     flex_orchestrator.results
     flex_orchestrator.backend.base
     flex_orchestrator.backend.memory
+    flex_orchestrator.backend.files
     flex_orchestrator.ext
     flex_orchestrator.fitting
     flex_orchestrator.study

@@ -3,7 +3,8 @@
 Each runs in its own process with its own Acquirium, so it doesn't share the
 session's server.
 
-- The step-by-step RO example and the five study-config ones.
+- The step-by-step RO example, the five study-config ones, and the surrogate
+  sweep stored on disk (no Acquirium).
 - The sample plugin (``examples/plugins/ro_tools``), installed with pip into
   a temporary folder: it loads only when ``FLEXORCH_PLUGINS`` lists it, its
   command gives the same result from Python and from ``flex-orch``, its own
@@ -87,6 +88,16 @@ def test_ro_study(name, export_folder):
         for tag in STUDY_TAGS[name]:
             [line] = [x for x in out.splitlines() if x.startswith(f"{tag}: all ")]
             assert int(line.split()[2]) > 400  # every variable, not a selection
+
+
+@pytest.mark.needs_highs
+def test_ro_study_on_disk():
+    pytest.importorskip("flexparameterize")
+    out = "\n" + script(EXAMPLES / "ro_study" / "store_on_disk.py")
+    assert "Read back from" in out
+    for tag in STUDY_TAGS["sweep_surrogates"]:
+        assert f"\n{tag}: $" in out
+    shutil.rmtree(EXAMPLES / "ro_study" / "on_disk")
 
 
 POPULATE = """

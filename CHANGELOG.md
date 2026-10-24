@@ -44,6 +44,16 @@
 - A root `README.md`.
 
 ### Added
+- A file backend (PLAN.md M5.5): `FileBackend(path)` keeps every study in a
+  folder on disk, with no Acquirium. It passes the same contract tests as
+  the memory and Acquirium backends, and every orchestrator feature works on
+  it (fits, sweeps, Ray, export, import). Each value is written as it's
+  recorded, with an atomic rename, so a crash loses only the run in
+  progress; deletion is real. Storing a result takes about 45 ms against
+  about 580 ms on a local Acquirium. `flex-orch --files DIR` selects it, and
+  `examples/ro_study/store_on_disk.py` shows it.
+- `examples/ro_study/compare_ray.py` times a month-long nested sweep
+  in-process and on Ray with half the machine's cores.
 - Parallel execution on Ray (PLAN.md D13, M5). With `max_workers > 1`,
   `execute_study` runs its tasks on Ray (`flex_orchestrator.parallel`):
   - Workers build, solve and export; the main process stores each result as

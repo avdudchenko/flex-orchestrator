@@ -31,6 +31,24 @@ Parallel execution needs Ray (the `ray` extra): `pip install -e ".[ray]"`.
 | Postgres | `db="postgresql://user@host/db"`, `data_dir=...` | The login comes from `FLEXORCH_DB_PASSWORD_FILE`, `FLEXORCH_DB_USER` / `FLEXORCH_DB_PASSWORD`, or libpq (`PGPASSWORD`, `~/.pgpass`). It never comes from code. |
 | remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. |
 
+### Without Acquirium
+
+To keep studies in a folder on disk, with no server, pass a `FileBackend`:
+
+```python
+from flex_orchestrator import Orchestrator
+from flex_orchestrator.backend import FileBackend
+
+with Orchestrator(FileBackend("runs")) as orch:
+    ...
+```
+
+Everything works the same, Ray and export included. Each result is written
+when it's stored, so a crash loses only the task in progress. On the command
+line it's `flex-orch --files runs ...`. One process writes a folder at a time,
+and there is no Acquirium query API (`orch.acquirium`) or unit verification.
+See [examples/ro_study/store_on_disk.py](examples/ro_study/store_on_disk.py).
+
 ## Quick start
 
 Trimmed from [examples/ro_surrogates/example.py](examples/ro_surrogates/example.py),

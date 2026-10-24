@@ -13,7 +13,9 @@
 ``CONNECTION`` picks the store as ``Orchestrator()`` does (D11):
 ``--data-dir`` (local, the default ``.flexorch``), ``--db`` with
 ``--data-dir`` (Postgres; the login comes from ``FLEXORCH_DB_*`` or libpq,
-never the command line), or ``--acquirium-url``. ``--plugin NAME`` loads an
+never the command line), or ``--acquirium-url``. ``--files DIR`` uses a
+folder on disk instead, with no Acquirium
+(:class:`~flex_orchestrator.backend.FileBackend`). ``--plugin NAME`` loads an
 installed plugin on top of those in ``FLEXORCH_PLUGINS``.
 
 ``cmd`` builds its options from the command's params model: ``--field-name``
@@ -40,6 +42,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args, rest = parser.parse_known_args(argv)
     if args.action != "cmd" and rest:
         parser.error(f"unrecognized arguments: {' '.join(rest)}")
+    if args.files and args.data_dir:
+        parser.error("--files is the store itself; it takes no --data-dir")
     try:
         with _orchestrator(args) as orch:
             result = _run(orch, args, rest)
@@ -60,6 +64,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--db", help="Postgres URL without a password, with --data-dir (mode 2)"
     )
+    mode.add_argument("--files", metavar="DIR", help="a folder on disk, no Acquirium")
     parser.add_argument(
         "--data-dir", help="the managed Acquirium's folder (default .flexorch)"
     )
@@ -110,6 +115,10 @@ def _parser() -> argparse.ArgumentParser:
 def _orchestrator(args: argparse.Namespace) -> Any:
     from flex_orchestrator.ext import create_orchestrator
 
+    if args.files:
+        from flex_orchestrator.backend.files import FileBackend
+
+        return create_orchestrator(FileBackend(args.files), plugins=args.plugin)
     return create_orchestrator(
         data_dir=args.data_dir,
         db=args.db,

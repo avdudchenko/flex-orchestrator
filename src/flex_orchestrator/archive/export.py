@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 import shutil
-import time
 import uuid
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -36,6 +35,7 @@ from flex_orchestrator.archive.models import (
     TimeIndex,
 )
 from flex_orchestrator.backend.base import to_utc
+from flex_orchestrator.backend.files import replace
 from flex_orchestrator.data import DATA_KIND, MANIFEST
 from flex_orchestrator.errors import ArchiveError
 from flex_orchestrator.export import ModelData
@@ -152,7 +152,7 @@ def export_study(
         writer.checksums()
         if target.exists():
             shutil.rmtree(target)
-        _replace(partial, target)
+        replace(partial, target)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
@@ -380,19 +380,6 @@ class _Writer:
             for name in sorted([*self.files, MANIFEST_FILE])
         ]
         (self.root / CHECKSUMS).write_text("".join(lines), encoding="utf-8")
-
-
-def _replace(source: Path, target: Path, attempts: int = 6) -> None:
-    # On Windows a file just written can be held for a moment by an antivirus
-    # or the search indexer; renaming its folder fails until it is let go.
-    for attempt in range(attempts):
-        try:
-            os.replace(source, target)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.1 * 2**attempt)  # 3 s in all
 
 
 def _encode(payload: Any) -> bytes:

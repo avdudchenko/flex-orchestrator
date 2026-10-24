@@ -35,7 +35,7 @@ class Fitted:
     Attributes:
         regressor: The fitted regressor object.
         spec: Its surrogate spec, as JSON.
-        coefficients: The fit result's coefficients.
+        coefficients: The fit result's coefficients.0.
         metrics: The fit result's metrics (``r2``, ``rmse``, ...).
         n_samples: Rows the fit used.
         data_window: ``[first, last]`` timestamp of the rows used, ISO 8601.

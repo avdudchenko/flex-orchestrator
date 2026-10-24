@@ -1136,6 +1136,7 @@ src/flex_orchestrator/
     base.py              # StorageBackend protocol: studies, variables, runs, records, deletion
     acquirium.py         # D9/D10 mapping onto ac.study / timeseries
     memory.py            # in-memory backend for unit tests (implements the same contract)
+    files.py             # FileBackend: the same contract in a folder on disk, no Acquirium (M5.5)
   flexpse/               # optional default hooks (import guarded)
     build.py  solve.py  surrogate.py  regression.py   # regression.py: get_regressor hook over flexparameterize.regression
   study/
@@ -1300,8 +1301,9 @@ compares each model's RO energy with the true curve. `examples/ro_study/` runs t
 dicts, one script per kind of sweep: `sweep_surrogates.py` (`fits` with the built-in regression, then a surrogate
 sweep; it reproduces `ro_surrogates` exactly and is the M4 "script 3"), `sweep_variables.py`,
 `sweep_configuration.py` (the feed's `max_withdrawal`), `sweep_nested.py` (surrogate × withdrawal; stores the full model, exports the study and checks every value read back) and
-`sweep_cases.py`. `examples/plugins/ro_tools/` is the sample plugin. `test_examples.py` runs them all
-(integration tier).
+`sweep_cases.py`; `store_on_disk.py` runs the surrogate sweep on the file backend (M5.5) and `compare_ray.py`
+times a month-long nested sweep in-process against Ray. `examples/plugins/ro_tools/` is the sample plugin.
+`test_examples.py` runs them all except `compare_ray.py`, which takes minutes (integration tier).
 
 ### Phase 1: core library
 
@@ -1461,6 +1463,44 @@ sweep; it reproduces `ro_surrogates` exactly and is the M4 "script 3"), `sweep_v
       the M6 tenant stack.
     - An actor pool reusing built models stays deferred (build is about 40% of a task, but sweeps that change
       the model can't reuse one).
+
+#### M5.5 — File backend: studies on disk without Acquirium (≈ 0.5 wk)
+Inserted after M5. Users who don't want to run Acquirium can still keep studies durably on disk. Before this,
+the only way was the memory backend plus `export_study` at the end, which loses everything on a crash, rewrites the
+whole folder on each export, and needs a full `import_study` to resume.
+- **`backend/files.py`: `FileBackend(path)`** implements `StorageBackend` on a folder, so everything above the
+  backend works unchanged: studies, fits, sweeps, Ray (the main process stores, as with Acquirium), export, import,
+  resume with `on_existing: skip`, deletion guards.
+- **Layout:** it mirrors the backend contract, not the D17 export layout. The export layout is built from the
+  orchestrator's meaning of each ledger, and a backend mustn't depend on that (§3 layering). `export_study` still
+  writes the portable copy.
+  ```
+  flexorch-files.json                 # {format: "flexorch-files", version: 1}; an unmarked non-empty folder is refused
+  studies/<safe name>-<sha256[:8]>/   # one per backend study; the hash keeps names that differ by case apart
+    study.json                        # the exact name and every declaration, in order
+    runs/<run_id>/run.json            # status, seq (start order), metadata, started_at, error, records in order;
+                                      # scalar and JSON values inline
+    runs/<run_id>/<n>.parquet|.bin    # a timeseries (time, value) or table as Parquet; a file's bytes
+  ```
+- **Durability:** every file is written to a temporary name and renamed (retrying a Windows `PermissionError`,
+  the helper shared with the export), so a crash loses only the run in progress; that run stays `running`, as on
+  Acquirium. Deletion is real: the directory is renamed aside, then removed; leftovers go on the next open.
+- **Limits:** one process writes a folder at a time; the index is read when the folder is opened and kept in
+  memory. No unit vocabulary (`resolve_unit` is `None`, as in the memory backend), no stream store for the
+  `ref_uris` / `resolve` / `sparql` fit selectors, and no `orch.acquirium`.
+- **Selection:** `Orchestrator(FileBackend(path))` and `flex-orch --files DIR`.
+- **Exit:** the contract tests and every backend-parametrized orchestrator test pass on it (the `backend` fixture
+  runs memory, files and Acquirium); reopening returns everything recorded; an example runs end to end.
+- **Status: built.**
+  - `test_contract.py` and the orchestrator, archive and study tests run on `files` in the unit tier;
+    `backend/tests/test_files.py` covers reopening, order across reopenings, a run cut short, crash leftovers, no
+    temporary files, deletion on disk, case-clashing names, foreign and newer folders, non-JSON metadata, and a
+    study run, reopened, resumed and exported. `test_cli.py` exports and imports with `--files`.
+  - `examples/ro_study/store_on_disk.py` (in `test_examples.py`).
+  - **Store time per result:** about 45 ms on files against about 580 ms on a local Acquirium, for
+    `sweep_nested` with the full model or scalars only. Storing is the serial part of a Ray study (M5), so Ray
+    gains more here: `compare_ray.py`'s 24 month-long solves with 10 workers took 89.5 s in-process and 39.2 s on
+    Ray (2.3×) on files, against 112 s and 67 s (1.7×) on Acquirium.
 
 #### M6 — Single-tenant deployment and backups (≈ 2 wks)
 - **Image** (`deploy/docker/`): micromamba plus `environment.yml` plus `idaes get-extensions`. Runs as non-root.
