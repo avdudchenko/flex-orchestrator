@@ -1,0 +1,89 @@
+name: CI
+
+# PLAN.md §7 and D20: lint gates everything; unit and component run on Linux
+# and Windows, integration on Linux. Benchmarks are opt-in and don't run here.
+# The test jobs build environment-dev.yml, so they use the same pinned flex-pse,
+# Acquirium, solvers and tool versions as a developer's flex-orch-dev env.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # weekly, to catch upstream drift (PLAN.md §6)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # A login shell activates the micromamba env in every step.
+    shell: bash -el {0}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The versions environment-dev.yml and .pre-commit-config.yaml pin.
+      # lint-imports only needs the package importable, not its dependencies.
+      - run: pip install black==26.5.1 ruff==0.15.20 import-linter
+      - run: pip install --no-deps -e .
+      - run: ruff check .
+      - run: black --check .
+      - run: lint-imports
+
+  unit:
+    name: unit (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-dev.yml
+          cache-environment: true
+      - run: pytest -m unit -n auto -p no:cacheprovider
+
+  component:
+    name: component (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-dev.yml
+          cache-environment: true
+      # One shared Acquirium for the run and Ray tests on 4 CPUs, so no -n.
+      - run: pytest -m component -p no:cacheprovider
+
+  integration:
+    name: integration (ubuntu-latest)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-dev.yml
+          cache-environment: true
+      - run: pytest -m integration -p no:cacheprovider

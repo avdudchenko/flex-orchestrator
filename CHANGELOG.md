@@ -44,6 +44,9 @@
 - A root `README.md`.
 
 ### Added
+- GitHub Actions CI (`.github/workflows/ci.yml`): `lint`, then `unit` and
+  `component` on Linux and Windows and `integration` on Linux, each built
+  from `environment-dev.yml`; also weekly, to catch upstream drift.
 - Model inputs from stored data (PLAN.md D21): a study's `model_inputs`, a
   case's `model_inputs`, a `model_inputs` sweep, and
   `orch.apply_model_inputs(model, inputs)` on a built model (new

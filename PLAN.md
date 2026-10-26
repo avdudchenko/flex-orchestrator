@@ -1438,6 +1438,13 @@ times a month-long nested sweep in-process against Ray. `examples/plugins/ro_too
   - `CONTRIBUTING.md` with the "run it before submitting" rule from flex-pse.
 - GitHub Actions: `lint` (`ruff check .`, `black --check .`, `lint-imports`) → unit (3.11–3.13, ubuntu + windows) →
   component, plus `docs.yml`.
+  **Built** as `.github/workflows/ci.yml`, on PRs, pushes to `main`, weekly and by hand:
+  - `lint` installs only the pinned tools and the package (no dependencies);
+  - every other job needs it and builds `environment-dev.yml` with micromamba (cached), so CI uses the
+    developer env's pins;
+  - `unit` (`-n auto`) and `component` run on ubuntu + windows, `integration` on ubuntu;
+  - Python is the env's 3.12 only, since the package needs `>=3.12`;
+  - not yet: `docs.yml` (no Sphinx project yet), the coverage floor, and benchmarks (opt-in).
 - The docs skeleton (§8): `conf.py`, `index.rst` with the flex-pse toctree captions, `_ext/flexorchdoc.py` (an empty
   shell), the `installation` and `architecture_and_layering` pages, and deployment to GitHub Pages.
 - **Exit:** the env builds, `pytest` collects and passes a smoke test, the docs build with `-W`, and CI passes.
