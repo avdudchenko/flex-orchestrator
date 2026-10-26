@@ -1025,8 +1025,14 @@ output_name: "recovery_{plant.ro.recovery}"
   combine: product
   output_name: "feed_{feed}_recovery_{plant.ro.recovery}"
   ```
-- **Outside studies.** `orch.build(tag, model_inputs=[...], **overrides)` resolves the same entries for one build,
-  and `orch.resolve_model_inputs(tag, [...])` returns the values and provenance without building.
+- **Outside studies,** inputs are applied to a built model as a separate, explicit step:
+  `model = orch.build(tag)`, then `orch.apply_model_inputs(model, entry)` (one entry or a list). It reads the
+  model's own time steps (`time_grid` takes a built model too) and fixes the values through a new
+  **`apply_values(model, values)` hook** (flex-pse: `flexops.apply_spec` with `fix` elements, checked against
+  bounds, all or nothing). A model from `orch.build` remembers what was applied, so storing its results records
+  the values in `overrides` and their provenance in `model_inputs`; applying a path again replaces it. A study still
+  resolves inputs before building and passes them as build overrides, so its Ray workers get plain values.
+  `orch.resolve_model_inputs(tag, [...])` returns the values and provenance without building.
 - **Selectors stay** in `fitting/selectors.py`; model inputs call the same `load`, and turn its `FitError` into
   `ModelInputError`. (Moving them would only rename the module tests patch.)
 - **Built** (M5.6) in `flex_orchestrator.inputs` (`models.py`: `ModelInput`, `InputSet`; `resolve.py`) and

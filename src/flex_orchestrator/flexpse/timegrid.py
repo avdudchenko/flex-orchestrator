@@ -1,6 +1,8 @@
-"""The flex-pse ``time_grid`` hook: a spec's time points, before it's built (D21)."""
+"""The flex-pse ``time_grid`` hook: a spec's or a built model's time points (D21)."""
 
 import datetime
+from collections.abc import Mapping
+from typing import Any
 
 import pandas as pd
 import pyomo.environ as pyo
@@ -10,28 +12,31 @@ from pyomo.environ import units as pyunits
 from flex_orchestrator.errors import SpecError
 
 
-def time_grid(spec: dict) -> pd.DatetimeIndex | None:
-    """Return the time points of a flex-pse spec's ``time`` element.
+def time_grid(spec_or_model: Any) -> pd.DatetimeIndex | None:
+    """Return the time points of a flex-pse spec's ``time`` element, or a model's.
 
-    The same points ``flexops`` builds the model's time block on: from
+    For a spec, the points ``flexops`` builds the model's time block on: from
     ``start_date`` (inclusive) to ``end_date`` (exclusive) every ``time_step``,
-    in naive local time.
+    in naive local time. For a built model, its time block's.
 
     Args:
-        spec: A ``FlowsheetSpec`` as JSON. Not modified.
+        spec_or_model: A ``FlowsheetSpec`` as JSON, or a built model. Not
+            modified.
 
     Returns:
-        The points, with ``freq`` set; ``None`` if the spec has no ``time``
-        element.
+        The points; ``None`` if there's no time axis.
 
     Raises:
-        SpecError: If the spec has two ``time`` elements, or the dates or step
-            don't make a whole number of steps.
+        SpecError: If there are two time axes, or the dates or step don't make
+            a whole number of steps.
 
     Example:
         >>> time_grid(spec)[:2]  # doctest: +SKIP
         DatetimeIndex(['2025-07-08 00:00:00', '2025-07-08 01:00:00'], ...)
     """
+    if not isinstance(spec_or_model, Mapping):
+        return _of_model(spec_or_model)
+    spec = spec_or_model
     found = [e for e in spec.get("elements", []) if e.get("kind") == "time"]
     if not found:
         return None
@@ -56,3 +61,19 @@ def time_grid(spec: dict) -> pd.DatetimeIndex | None:
             f"{element['time_step']} steps."
         )
     return pd.date_range(start, periods=n, freq=step)
+
+
+def _of_model(model: Any) -> pd.DatetimeIndex | None:
+    blocks = [
+        b
+        for b in model.component_data_objects(pyo.Block, descend_into=True)
+        if isinstance(getattr(type(b), "datetime_index", None), property)
+    ]
+    if not blocks:
+        return None
+    if len(blocks) > 1:
+        raise SpecError(
+            f"The model has {len(blocks)} time blocks; apply model inputs to one "
+            "with a single time axis."
+        )
+    return pd.DatetimeIndex(blocks[0].datetime_index)

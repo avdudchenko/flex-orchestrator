@@ -2,8 +2,8 @@
 
 On memory and files: a ``model_inputs`` section, a ``model_inputs`` sweep and
 a case, what each result records, the clash with a ``variable`` sweep, export
-and import, and ``orch.build``. A tiny Pyomo model stands in for flex-pse; its
-``time_grid`` hook reads the spec's ``start`` and ``steps``.
+and import, and ``orch.apply_model_inputs``. A tiny Pyomo model stands in for
+flex-pse; its ``time_grid`` hook reads the spec's ``start`` and ``steps``.
 """
 
 import numpy as np
@@ -22,14 +22,25 @@ from flex_orchestrator.testing import fake_solve
 def tiny_build(spec, **overrides):
     m = pyo.ConcreteModel()
     m.inputs = pyo.Var(initialize=len(overrides))
+    m.spec, m.applied = spec, {}
     return m
 
 
-def hourly_grid(spec):
+def hourly_grid(spec_or_model):
+    spec = getattr(spec_or_model, "spec", spec_or_model)
     return pd.date_range(spec["start"], periods=spec["steps"], freq="h")
 
 
-HOOKS = HookSet(build=tiny_build, solve=fake_solve, time_grid=hourly_grid)
+def record_values(model, values):
+    model.applied.update(values)
+
+
+HOOKS = HookSet(
+    build=tiny_build,
+    solve=fake_solve,
+    time_grid=hourly_grid,
+    apply_values=record_values,
+)
 DEMAND = {"dataset": "ops", "columns": ["demand"], "rename": {"demand": "plant.d"}}
 LINES = {
     "type": "model_inputs",
@@ -157,16 +168,22 @@ def test_export_and_import_keep_where_inputs_came_from(orch, tmp_path):
     assert orch.result("line_a").model_inputs == loaded.model_inputs
 
 
-def test_a_build_takes_model_inputs(orch):
-    model = orch.build("base", model_inputs=[DEMAND], **{"plant.x": 1.0})
-    assert pyo.value(model.inputs) == 2
+def test_inputs_applied_to_a_built_model(orch):
+    model = orch.build("base", **{"plant.x": 1.0})
+    found = orch.apply_model_inputs(model, DEMAND)  # one entry, or a list
+    assert model.applied == found.values
+    assert model.applied["plant.d"]["value"] == [24.0, 25.0, 26.0]
+    feed = {"dataset": "ops", "columns": ["feed_a"], "rename": {"feed_a": "plant.f"}}
+    orch.apply_model_inputs(model, [feed, {**DEMAND, "reduce": "last"}])
+    assert model.applied["plant.d"] == {"value": 26.0, "units": "m^3/hr"}
     stored = orch.store_model_results("built", model, fake_solve(model))
     result = orch.result("built")
     assert stored.ok and result.overrides["plant.x"] == 1.0
-    assert result.overrides["plant.d"]["value"] == [24.0, 25.0, 26.0]
-    assert result.model_inputs[0]["paths"] == ["plant.d"]
+    # The second apply replaced plant.d, so only it is recorded for that path.
+    assert result.overrides["plant.d"]["value"] == 26.0
+    assert [m["paths"] for m in result.model_inputs] == [["plant.f"], ["plant.d"]]
     with pytest.raises(ModelInputError, match="set both"):
-        orch.build("base", model_inputs=[DEMAND], **{"plant.d": 1.0})
+        orch.apply_model_inputs(orch.build("base", **{"plant.d": 1.0}), DEMAND)
     found = orch.resolve_model_inputs("base", [{**DEMAND, "reduce": "mean"}])
     assert found.values == {"plant.d": {"value": 25.0, "units": "m^3/hr"}}
 

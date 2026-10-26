@@ -45,8 +45,9 @@
 
 ### Added
 - Model inputs from stored data (PLAN.md D21): a study's `model_inputs`, a
-  case's `model_inputs`, a `model_inputs` sweep, and `orch.build(...,
-  model_inputs=...)` set model variables from a dataset, a result or
+  case's `model_inputs`, a `model_inputs` sweep, and
+  `orch.apply_model_inputs(model, inputs)` on a built model (new
+  `apply_values` hook) set model variables from a dataset, a result or
   general-store streams, selected as fit data is. The data is lined up with
   the model's time steps (the new `time_grid` hook) in the facility's
   `timezone`, resampled, gap-filled (`interpolate` by default, `ffill`,

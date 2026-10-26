@@ -109,7 +109,8 @@ def test_streams_set_the_pump_flow_on_acquirium(
             "rename": {"*": FLOW},
         }
 
-    model = orch.build("demo", model_inputs=[line("FT_A")])
+    model = orch.build("demo")
+    orch.apply_model_inputs(model, line("FT_A"))
     # Midnight UTC is the stream's third sample: 4.0 + 2/10.
     assert [pyo.value(model.demo.pump.flow_in[i]) for i in range(2)] == [4.2, 4.3]
     run = orch.execute_study(

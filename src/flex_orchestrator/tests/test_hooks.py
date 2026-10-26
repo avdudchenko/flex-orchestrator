@@ -159,6 +159,7 @@ def test_default_hooks_are_flexpse_import_strings():
         "time_sets",
         "configure",
         "time_grid",
+        "apply_values",
     }
     assert all(ref.startswith("flex_orchestrator.flexpse:") for ref in refs.values())
 
