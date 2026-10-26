@@ -232,6 +232,51 @@ class TimeSetsFn(Protocol):
         """
 
 
+class TimeGridFn(Protocol):
+    """Gives a model's time axis, so stored data can be aligned to it (PLAN.md D21).
+
+    Example:
+        >>> import pandas as pd
+        >>> def time_grid(spec_or_model):
+        ...     return pd.date_range("2025-07-08", periods=24, freq="1h")
+    """
+
+    def __call__(self, spec_or_model: Any) -> Any:
+        """Return the model's time points, or ``None`` if it has no time axis.
+
+        Args:
+            spec_or_model: A model spec (a dict: a study reads the time steps
+                before it builds) or a built model. Must not be modified.
+
+        Returns:
+            A naive pandas ``DatetimeIndex`` in the model's local time, one
+            entry per time point with a fixed ``freq``, or ``None``.
+        """
+
+
+class ApplyValuesFn(Protocol):
+    """Fixes variables of a built model to values (PLAN.md D21).
+
+    ``orch.apply_model_inputs`` uses it to set stored data on a model that is
+    already built.
+
+    Example:
+        >>> def apply_values(model, values) -> None:
+        ...     for path, value in values.items():
+        ...         model.find_component(path).fix(value)
+    """
+
+    def __call__(self, model: Any, values: dict[str, Any]) -> None:
+        """Fix each path's variable to its value, in place.
+
+        Args:
+            model: The built model.
+            values: ``{variable path: value}``, as a build hook's overrides
+                take them: a number, one number per time point, or
+                ``{"value": ..., "units": ...}``.
+        """
+
+
 HookRef = Any
 """A hook as given by a user: a callable, an import string or a registered name."""
 
@@ -251,6 +296,8 @@ class HookSet:
         swap_surrogate: The optional :class:`SwapSurrogateFn`.
         time_sets: The optional :class:`TimeSetsFn`.
         configure: The optional :class:`ConfigureFn`.
+        time_grid: The optional :class:`TimeGridFn`.
+        apply_values: The optional :class:`ApplyValuesFn`.
 
     Example:
         >>> hooks = DEFAULT_HOOKS.merged(HookSet(build="mypkg.models:build"))
@@ -264,6 +311,8 @@ class HookSet:
     swap_surrogate: HookRef = None
     time_sets: HookRef = None
     configure: HookRef = None
+    time_grid: HookRef = None
+    apply_values: HookRef = None
 
     def merged(self, other: "HookSet") -> "HookSet":
         """Return these hooks with every slot ``other`` sets taking precedence.
@@ -331,7 +380,8 @@ class HookSet:
 
 HOOK_KINDS = tuple(f.name for f in fields(HookSet))
 """tuple[str, ...]: The hook slots a :class:`HookSet` has: ``build``, ``solve``,
-``apply_surrogate``, ``swap_surrogate``, ``time_sets`` and ``configure``."""
+``apply_surrogate``, ``swap_surrogate``, ``time_sets``, ``configure``,
+``time_grid`` and ``apply_values``."""
 
 DEFAULT_HOOKS = HookSet(
     build="flex_orchestrator.flexpse:build",
@@ -340,6 +390,8 @@ DEFAULT_HOOKS = HookSet(
     swap_surrogate="flex_orchestrator.flexpse:swap_surrogate",
     time_sets="flex_orchestrator.flexpse:time_sets",
     configure="flex_orchestrator.flexpse:configure",
+    time_grid="flex_orchestrator.flexpse:time_grid",
+    apply_values="flex_orchestrator.flexpse:apply_values",
 )
 """HookSet: The flex-pse hooks, used when nothing else is configured."""
 
@@ -447,6 +499,8 @@ class HookRegistry:
         swap_surrogate: HookRef = None,
         time_sets: HookRef = None,
         configure: HookRef = None,
+        time_grid: HookRef = None,
+        apply_values: HookRef = None,
         replace: bool = False,
     ) -> HookSet:
         """Register a named set of hooks.
@@ -460,6 +514,8 @@ class HookRegistry:
             swap_surrogate: A callable or import string.
             time_sets: A callable or import string.
             configure: A callable or import string.
+            time_grid: A callable or import string.
+            apply_values: A callable or import string.
             replace: Allow replacing a set already registered under ``name``.
 
         Returns:
@@ -481,7 +537,14 @@ class HookRegistry:
                 "replace them."
             )
         hooks = HookSet(
-            build, solve, apply_surrogate, swap_surrogate, time_sets, configure
+            build,
+            solve,
+            apply_surrogate,
+            swap_surrogate,
+            time_sets,
+            configure,
+            time_grid,
+            apply_values,
         )
         for kind, hook in hooks.slots().items():
             if hook is None or callable(hook):

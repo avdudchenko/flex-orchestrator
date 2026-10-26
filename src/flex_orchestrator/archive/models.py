@@ -186,6 +186,8 @@ class ResultFile(_File):
         started_at: When its run started.
         model_spec_ref: ``{tag, spec_hash}`` of the spec it was built from.
         overrides: The build overrides.
+        model_inputs: Where the model inputs among ``overrides`` came from
+            (D21).
         hooks: The hooks that built and solved it.
         solve_outcome: How the solve ended.
         metadata: The run's metadata.
@@ -203,6 +205,7 @@ class ResultFile(_File):
     started_at: str | None = None
     model_spec_ref: dict[str, str] | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
+    model_inputs: list[dict[str, Any]] = Field(default_factory=list)
     hooks: dict[str, str] = Field(default_factory=dict)
     solve_outcome: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -44,6 +44,7 @@ from flex_orchestrator.hooks import (
     hook_ref,
     run_solve,
 )
+from flex_orchestrator.inputs.models import ModelInput
 from flex_orchestrator.orchestrator import MODEL_SPEC, RESULT_KIND
 from flex_orchestrator.specs import normalise_spec
 from flex_orchestrator.study.config import ExportConfig
@@ -75,6 +76,10 @@ class TaskSpec(BaseModel):
         configuration: ``{option path: value}``, set in ``base`` first.
         surrogates: Surrogates applied to ``base`` (after the configuration).
         overrides: Passed to the build hook: the variables to fix.
+        model_inputs: The study's ``model_inputs`` entries (D21), resolved
+            against the spec's time steps before the build.
+        swept_inputs: Entries from a sweep or case; each replaces a
+            ``model_inputs`` entry that sets the same path.
         labels: The values ``output_name`` was rendered with.
         hooks: Hook import strings or registered names by slot; unset slots
             use the orchestrator's.
@@ -91,6 +96,8 @@ class TaskSpec(BaseModel):
     configuration: dict[str, Any] = Field(default_factory=dict)
     surrogates: list[SurrogateChoice] = Field(default_factory=list)
     overrides: dict[str, Any] = Field(default_factory=dict)
+    model_inputs: list[ModelInput] = Field(default_factory=list)
+    swept_inputs: list[ModelInput] = Field(default_factory=list)
     labels: dict[str, Any] = Field(default_factory=dict)
     hooks: dict[str, str] = Field(default_factory=dict)
     export: ExportConfig = Field(default_factory=ExportConfig)
@@ -170,6 +177,10 @@ class Work:
         unit_overrides: The orchestrator's ``{pyomo unit: QUDT key}`` overrides.
         base_units: The orchestrator's base-unit symbols.
         bundle: The spec to build; on Ray it's sent separately, once per spec.
+        overrides: What the build hook gets: the task's overrides and the
+            values its model inputs resolved to.
+        model_inputs: Where those values came from (D21), stored with the
+            result.
     """
 
     task: TaskSpec
@@ -178,6 +189,8 @@ class Work:
     unit_overrides: dict[str, str]
     base_units: dict[str, str]
     bundle: SpecBundle | None = None
+    overrides: dict[str, Any] = field(default_factory=dict)
+    model_inputs: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -251,7 +264,8 @@ def study_hooks(
 def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
     """Get a task ready to execute: store its derived spec and read the spec.
 
-    Runs in the main process, which holds the store.
+    Runs in the main process, which holds the store, so it also resolves the
+    task's model inputs (D21) into plain values.
 
     Args:
         orch: The orchestrator, with the task's study selected.
@@ -264,6 +278,8 @@ def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
     Raises:
         TagExistsError: If the result's tag (or a different derived spec) is
             stored and ``on_existing`` doesn't allow it.
+        ModelInputError: If a model input can't be resolved, or sets a path
+            the task's overrides set too.
     """
     replace = task.on_existing == "replace"
     orch._check_new(task.tag, RESULT_KIND, replace)
@@ -272,6 +288,13 @@ def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
     selection = task.export.model_dump(include={"keys", "include", "exclude"})
     if all(v is None for v in selection.values()):
         selection = {**selection, **orch.default_export_selection()}
+    overrides, provenance = dict(task.overrides), []
+    if task.model_inputs or task.swept_inputs:
+        found = orch._resolve_inputs(
+            record.spec, task.model_inputs, task.swept_inputs, hooks, task.overrides
+        )
+        overrides.update(found.values)
+        provenance = found.provenance
     mapper = orch.unit_mapper
     return Work(
         task=task,
@@ -282,6 +305,8 @@ def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
         bundle=SpecBundle(
             spec_tag, record.spec_hash, record.spec, dict(record.assets), files
         ),
+        overrides=overrides,
+        model_inputs=provenance,
     )
 
 
@@ -304,7 +329,7 @@ def execute(work: Work, bundle: SpecBundle | None = None) -> Done:
         build = registry.resolve_ref(work.hooks.build, "build")
         with tempfile.TemporaryDirectory(prefix="flexorch-spec-") as directory:
             spec = materialize_spec(bundle.spec, bundle.assets, bundle.files, directory)
-            model = build(spec, **work.task.overrides)
+            model = build(spec, **work.overrides)
         done.seconds["build"] = time.perf_counter() - clock
         solve = registry.resolve_ref(work.hooks.solve, "solve")
         done.outcome = run_solve(solve, model, **work.task.solve_options)
@@ -369,7 +394,8 @@ def finish(orch: Any, work: Work, done: Done, attempts: int) -> TaskResult:
             streams=task.export.streams,
             replace=task.on_existing == "replace",
             spec=spec_tag,
-            overrides=task.overrides,
+            overrides=work.overrides,
+            model_inputs=work.model_inputs or None,
         )
     done.seconds["store"] = time.perf_counter() - clock
     crashed = stored.outcome is not None and stored.outcome.status == "error"

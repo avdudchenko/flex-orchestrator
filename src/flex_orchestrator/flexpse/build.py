@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pyomo.environ as pyo
-from flexops import build_model
+from flexops import apply_spec, build_model
 
 from flex_orchestrator.errors import SpecError
 
@@ -76,6 +76,26 @@ def with_overrides(spec: dict, overrides: Mapping[str, Any]) -> dict:
             element["value"] = value
         fixes.append(element)
     return {**spec, "elements": [*elements, *fixes]}
+
+
+def apply_values(model: pyo.Block, values: Mapping[str, Any]) -> None:
+    """Fix variables of a built flex-pse model, as ``fix`` elements would (D21).
+
+    The values are checked against the variables' bounds and applied together,
+    all or nothing (:func:`flexops.apply_spec`). A later apply of a point
+    replaces an earlier one.
+
+    Args:
+        model: The built model, changed in place.
+        values: ``{variable path: value}``, as :func:`with_overrides` takes
+            them. A costing field (a price) can't be set on a built model; set
+            it before building, as a configuration option.
+
+    Raises:
+        flexcore.exceptions.FlexConfigError: If a path names no variable, or a
+            value doesn't fit it.
+    """
+    apply_spec(model, with_overrides({"elements": []}, values)["elements"])
 
 
 def configure(spec: dict, path: str, value: Any) -> dict:

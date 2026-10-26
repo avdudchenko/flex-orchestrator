@@ -44,6 +44,20 @@
 - A root `README.md`.
 
 ### Added
+- GitHub Actions CI (`.github/workflows/ci.yml`): `lint`, then `unit` and
+  `component` on Linux and Windows and `integration` on Linux, each built
+  from `environment-dev.yml`; also weekly, to catch upstream drift.
+- Model inputs from stored data (PLAN.md D21): a study's `model_inputs`, a
+  case's `model_inputs`, a `model_inputs` sweep, and
+  `orch.apply_model_inputs(model, inputs)` on a built model (new
+  `apply_values` hook) set model variables from a dataset, a result or
+  general-store streams, selected as fit data is. The data is lined up with
+  the model's time steps (the new `time_grid` hook) in the facility's
+  `timezone`, resampled, gap-filled (`interpolate` by default, `ffill`,
+  `zero` or `error`) or reduced to one number, and shifted by `offset`. Each
+  result records where its inputs came from (`ResultHandle.model_inputs`,
+  kept through export and import). `orch.resolve_model_inputs` returns the
+  values without building. Example: `examples/ro_study/model_inputs.py`.
 - A `streams` fit selector names general-store streams by `source_id` and
   `ref_name`, as their driver registered them, instead of by reference URI.
 - A file backend (PLAN.md M5.5): `FileBackend(path)` keeps every study in a

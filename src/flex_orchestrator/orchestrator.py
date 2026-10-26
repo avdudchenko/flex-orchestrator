@@ -44,6 +44,7 @@ from flex_orchestrator.data import DATA_KIND, StoredData
 from flex_orchestrator.errors import (
     AmbiguousColumnError,
     HookError,
+    ModelInputError,
     StorageError,
     StudyExistsError,
     StudyNotFoundError,
@@ -115,6 +116,9 @@ MODEL_SPEC_REF = "model_spec_ref"
 """str: The label of a result's JSON input naming the spec it was built from."""
 OVERRIDES = "overrides"
 """str: The label of a result's JSON input holding the build overrides."""
+MODEL_INPUTS = "model_inputs"
+"""str: The label of a result's JSON input recording where its model inputs came
+from (D21)."""
 SOLVE_OUTCOME = "solve_outcome"
 """str: The label of the JSON output that holds a result's solve outcome."""
 
@@ -243,6 +247,20 @@ class ResultHandle(results.ResultReads):
             self._orch._runs, self.run_id, labels=[OVERRIDES]
         )
         return dict(found[0].value) if found else {}
+
+    @property
+    def model_inputs(self) -> list[dict[str, Any]]:
+        """Where its model inputs came from (D21), per entry; ``[]`` if none.
+
+        Each entry holds the entry as sent (``input``), what its selector
+        resolved to (``resolved``: the dataset run, or the stream refs), the
+        ``paths`` it set, the ``window`` read, the steps ``filled`` and the
+        values' ``data_hash``. The values themselves are in :attr:`overrides`.
+        """
+        found = self._orch.backend.records(
+            self._orch._runs, self.run_id, labels=[MODEL_INPUTS]
+        )
+        return list(found[0].value) if found else []
 
     def spec(self) -> SpecRecord:
         """Return the model spec the result was built from.
@@ -679,7 +697,8 @@ class Orchestrator:
         The spec's files are written to a temporary directory for the build,
         so it doesn't matter where they were when the spec was stored. The
         model remembers the spec tag, hash and overrides, so storing its
-        results links them to the spec (D10).
+        results links them to the spec (D10). Set variables from stored data
+        afterwards, with :meth:`apply_model_inputs`.
 
         Args:
             tag: The model spec's tag.
@@ -706,6 +725,127 @@ class Orchestrator:
         except (AttributeError, TypeError):  # pragma: no cover - a frozen model
             pass
         return model
+
+    def apply_model_inputs(self, model: Any, model_inputs: Any) -> Any:
+        """Set variables of a built model from stored data (D21).
+
+        Each entry's data is lined up with the model's time steps (the
+        ``time_grid`` hook) and its variables fixed to it (the ``apply_values``
+        hook). A model from :meth:`build` remembers what was applied, so
+        storing its results records the values (in ``overrides``) and where
+        they came from (``model_inputs``). Applying a path again replaces it.
+
+        Args:
+            model: The built model, changed in place.
+            model_inputs: One entry or a list, each a
+                :class:`~flex_orchestrator.inputs.ModelInput` or a mapping in
+                its shape (a fit selector, its columns renamed to the paths
+                they set, plus how to line it up).
+
+        Returns:
+            A :class:`~flex_orchestrator.inputs.resolve.Resolved`: the
+            ``values`` fixed and their ``provenance``.
+
+        Raises:
+            ModelInputError: If an entry can't be resolved, or sets a path the
+                build's overrides set.
+
+        Example:
+            >>> model = orch.build("base")  # doctest: +SKIP
+            >>> orch.apply_model_inputs(model, {  # doctest: +SKIP
+            ...     "streams": [{"source_id": "historian", "ref_name": "FT_101"}],
+            ...     "rename": {"*": "plant.ro.permeate"},
+            ... })
+        """
+        from flex_orchestrator.inputs.models import ModelInput
+
+        if isinstance(model_inputs, ModelInput | Mapping):
+            model_inputs = [model_inputs]
+        built = getattr(model, "_flexorch_spec", None)
+        link = dict(built) if isinstance(built, Mapping) else None
+        applied = list((link or {}).get("model_inputs") or [])
+        earlier = {path for record in applied for path in record["paths"]}
+        overrides = (link or {}).get("overrides", {})
+        found = self._resolve_inputs(
+            model,
+            model_inputs,
+            (),
+            self.hooks,
+            {k: v for k, v in overrides.items() if k not in earlier},
+        )
+        hook = self.registry.resolve_ref(self.hooks.apply_values, "apply_values")
+        hook(model, found.values)
+        if link is not None:
+            kept = [
+                {**r, "paths": [p for p in r["paths"] if p not in found.values]}
+                for r in applied
+            ]
+            link["overrides"] = {**overrides, **to_json_spec(found.values)}
+            link["model_inputs"] = [r for r in kept if r["paths"]] + found.provenance
+            model._flexorch_spec = link
+        return found
+
+    def resolve_model_inputs(self, tag: str, model_inputs: Sequence[Any]) -> Any:
+        """Resolve model inputs (D21) against a stored spec, without building.
+
+        Args:
+            tag: The model spec whose time steps the data is lined up with.
+            model_inputs: The entries: :class:`~flex_orchestrator.inputs.ModelInput`
+                or mappings.
+
+        Returns:
+            A :class:`~flex_orchestrator.inputs.resolve.Resolved`: ``values``
+            (the build overrides) and ``provenance``.
+
+        Raises:
+            TagNotFoundError: If the spec isn't stored.
+            ModelInputError: If an entry can't be resolved.
+        """
+        record, _ = self._read_spec(MODEL_SPEC, tag)
+        return self._resolve_inputs(record.spec, model_inputs, (), self.hooks, {})
+
+    def _resolve_inputs(
+        self,
+        spec_or_model: Any,
+        model_inputs: Sequence[Any],
+        swept: Sequence[Any],
+        hooks: HookSet,
+        overrides: Mapping[str, Any],
+    ) -> Any:
+        """Resolve entries against a spec's or model's time steps (``time_grid``)."""
+        from flex_orchestrator.inputs.models import ModelInput
+        from flex_orchestrator.inputs.resolve import resolve
+
+        def entries(items: Sequence[Any]) -> list[ModelInput]:
+            return [
+                i if isinstance(i, ModelInput) else ModelInput.model_validate(i)
+                for i in items
+            ]
+
+        ref = hooks.time_grid or self.hooks.time_grid
+        grid = None
+        if ref is not None:
+            try:
+                hook = self.registry.resolve_ref(ref, "time_grid")
+            except HookError:
+                if ref != DEFAULT_HOOKS.time_grid:
+                    raise
+                hook = None  # flex-pse isn't installed: no time steps to read
+            grid = hook(spec_or_model) if hook is not None else None
+        found = resolve(
+            self,
+            entries(model_inputs),
+            grid,
+            entries(swept),
+            cache=getattr(self._call, "inputs", None),
+        )
+        both = sorted(set(found.values) & set(overrides))
+        if both:
+            raise ModelInputError(
+                f"{both} are set both by model_inputs and by a variable (a sweep, "
+                "a case or an override); set each path one way."
+            )
+        return found
 
     def apply_surrogate(
         self,
@@ -810,23 +950,39 @@ class Orchestrator:
         as this orchestrator is the only writer, which a study run assumes.
         """
         previous = self._spec_cache
+        inputs = getattr(self._call, "inputs", None)
         if previous is None:
-            self._call.specs = {}
+            # Model inputs' data too (D21): read once per distinct selection.
+            self._call.specs, self._call.inputs = {}, {}
         try:
             yield
         finally:
-            self._call.specs = previous
+            self._call.specs, self._call.inputs = previous, inputs
 
     def _spec_link(
-        self, model: Any, spec: str | None, overrides: Mapping[str, Any] | None
+        self,
+        model: Any,
+        spec: str | None,
+        overrides: Mapping[str, Any] | None,
+        model_inputs: Sequence[Mapping[str, Any]] | None = None,
     ) -> "_SpecLink | None":
         """The spec a result was built from: given, or remembered by build()."""
         if spec is not None:
             record = self.model_spec(spec)
-            return _SpecLink(spec, record.spec_hash, to_json_spec(overrides or {}))
+            return _SpecLink(
+                spec,
+                record.spec_hash,
+                to_json_spec(overrides or {}),
+                [dict(m) for m in model_inputs] if model_inputs else None,
+            )
         built = getattr(model, "_flexorch_spec", None)
         if isinstance(built, Mapping):
-            return _SpecLink(built["tag"], built["spec_hash"], built["overrides"])
+            return _SpecLink(
+                built["tag"],
+                built["spec_hash"],
+                built["overrides"],
+                built.get("model_inputs"),
+            )
         return None
 
     # Datasets (D6)
@@ -1049,6 +1205,7 @@ class Orchestrator:
         replace: bool = False,
         spec: str | None = None,
         overrides: Mapping[str, Any] | None = None,
+        model_inputs: Sequence[Mapping[str, Any]] | None = None,
     ) -> StoredResult:
         """Store values that are already exported under ``tag``.
 
@@ -1067,6 +1224,8 @@ class Orchestrator:
             spec: The model spec the values came from; see
                 :meth:`store_model_results`.
             overrides: The build overrides used with ``spec``.
+            model_inputs: Where the model inputs among ``overrides`` came from
+                (D21), recorded with ``spec``.
 
         Returns:
             What was stored.
@@ -1079,7 +1238,7 @@ class Orchestrator:
                 stored.
         """
         _check_outcome(outcome)
-        link = self._spec_link(None, spec, overrides)
+        link = self._spec_link(None, spec, overrides, model_inputs)
         return self._guarded(
             RESULT_KIND,
             tag,
@@ -1489,12 +1648,18 @@ class Orchestrator:
         if link is not None:
             for label in (MODEL_SPEC_REF, OVERRIDES):
                 self.backend.declare(self._runs, label, role="input", kind="json")
+            if link.model_inputs:
+                self.backend.declare(
+                    self._runs, MODEL_INPUTS, role="input", kind="json"
+                )
             metadata.update(link.metadata())
         run_id = self.backend.start_run(self._runs, metadata)
         try:
             if link is not None:
                 self.backend.record(run_id, MODEL_SPEC_REF, link.ref())
                 self.backend.record(run_id, OVERRIDES, link.overrides)
+                if link.model_inputs:
+                    self.backend.record(run_id, MODEL_INPUTS, link.model_inputs)
             if manifest is not None:
                 self.backend.record(run_id, MODEL_MANIFEST, manifest)
             if table is not None:
@@ -1734,6 +1899,7 @@ class _SpecLink:
     tag: str
     spec_hash: str
     overrides: dict[str, Any]
+    model_inputs: list[dict[str, Any]] | None = None
 
     def ref(self) -> dict[str, str]:
         return {"tag": self.tag, "spec_hash": self.spec_hash}

@@ -2,12 +2,19 @@
   "$defs": {
     "Case": {
       "additionalProperties": false,
-      "description": "One hand-picked combination in a :class:`CasesSweep`.\n\nAttributes:\n    name: The case's name, which ``output_name`` renders as ``{case}``.\n    spec: A model spec to build from instead of ``base_model_spec``.\n    surrogates: ``{unit: surrogate tag}``.\n    configuration_options: ``{option path: value}``, as a\n        :class:`ConfigurationSweep` sets them.\n    variables: ``{variable path: value}``, as a :class:`VariableSweep`\n        fixes them.",
+      "description": "One hand-picked combination in a :class:`CasesSweep`.\n\nAttributes:\n    name: The case's name, which ``output_name`` renders as ``{case}``.\n    spec: A model spec to build from instead of ``base_model_spec``.\n    surrogates: ``{unit: surrogate tag}``.\n    configuration_options: ``{option path: value}``, as a\n        :class:`ConfigurationSweep` sets them.\n    variables: ``{variable path: value}``, as a :class:`VariableSweep`\n        fixes them.\n    model_inputs: Entries that set variables from stored data, as a\n        :class:`ModelInputsSweep` value does.",
       "properties": {
         "configuration_options": {
           "additionalProperties": true,
           "title": "Configuration Options",
           "type": "object"
+        },
+        "model_inputs": {
+          "items": {
+            "$ref": "#/$defs/ModelInput"
+          },
+          "title": "Model Inputs",
+          "type": "array"
         },
         "name": {
           "title": "Name",
@@ -406,7 +413,7 @@
     },
     "HooksConfig": {
       "additionalProperties": false,
-      "description": "Hooks for the study's tasks: import strings or registered names (D1).\n\nUnset slots use the orchestrator's hooks; hooks passed to\n``execute_study`` win over these.\n\nAttributes:\n    build: The build hook.\n    solve: The solve hook.\n    apply_surrogate: Applies a surrogate sweep's surrogates to the spec.\n    swap_surrogate: Swaps a surrogate on a live model.\n    time_sets: Names a built model's time Sets for the exporter.\n    configure: Sets a configuration sweep's options in the spec.",
+      "description": "Hooks for the study's tasks: import strings or registered names (D1).\n\nUnset slots use the orchestrator's hooks; hooks passed to\n``execute_study`` win over these.\n\nAttributes:\n    build: The build hook.\n    solve: The solve hook.\n    apply_surrogate: Applies a surrogate sweep's surrogates to the spec.\n    swap_surrogate: Swaps a surrogate on a live model.\n    time_sets: Names a built model's time Sets for the exporter.\n    configure: Sets a configuration sweep's options in the spec.\n    time_grid: Gives a spec's time axis, for ``model_inputs``.",
       "properties": {
         "apply_surrogate": {
           "anyOf": [
@@ -468,6 +475,18 @@
           "default": null,
           "title": "Swap Surrogate"
         },
+        "time_grid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time Grid"
+        },
         "time_sets": {
           "anyOf": [
             {
@@ -482,6 +501,340 @@
         }
       },
       "title": "HooksConfig",
+      "type": "object"
+    },
+    "InputResample": {
+      "additionalProperties": false,
+      "description": "How samples become one value per time step.\n\nAttributes:\n    agg: How the samples in one step combine.",
+      "properties": {
+        "agg": {
+          "default": "mean",
+          "enum": [
+            "mean",
+            "sum",
+            "min",
+            "max",
+            "median",
+            "first",
+            "last"
+          ],
+          "title": "Agg",
+          "type": "string"
+        }
+      },
+      "title": "InputResample",
+      "type": "object"
+    },
+    "InputSet": {
+      "additionalProperties": false,
+      "description": "One value of a ``model_inputs`` sweep: a labelled set of entries.\n\nAttributes:\n    label: What ``output_name`` renders the set as.\n    inputs: The entries a task with this value uses.",
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/ModelInput"
+          },
+          "minItems": 1,
+          "title": "Inputs",
+          "type": "array"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "inputs"
+      ],
+      "title": "InputSet",
+      "type": "object"
+    },
+    "ModelInput": {
+      "additionalProperties": false,
+      "description": "One ``model_inputs`` entry: a selector, then its alignment.\n\nAttributes:\n    timezone: The facility's time zone (an IANA name such as\n        ``\"America/Los_Angeles\"``). The model runs on that site's wall\n        clock, so stored UTC timestamps are converted to it before they're\n        lined up with the model's (naive) time steps. ``UTC`` by default:\n        data stored in UTC means a model in UTC.\n    resample: How the samples in one time step combine; ``mean`` by\n        default.\n    gaps: A time step with no value is filled by ``interpolate`` (in\n        time, the default), ``ffill`` (the last value carried forward) or\n        ``zero``; ``error`` refuses any gap.\n    limit: The longest run of missing steps ``interpolate`` or ``ffill``\n        fills; a longer one fails.\n    reduce: Set the variable to one number instead of a series: this\n        statistic of the data over the model's horizon.\n    offset: Read the data this far from the model's horizon, as a pandas\n        offset (``\"-365D\"``: last year's data for this horizon).",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Columns"
+        },
+        "dataset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dataset"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        },
+        "gaps": {
+          "default": "interpolate",
+          "enum": [
+            "interpolate",
+            "ffill",
+            "zero",
+            "error"
+          ],
+          "title": "Gaps",
+          "type": "string"
+        },
+        "keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keys"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offset"
+        },
+        "reduce": {
+          "anyOf": [
+            {
+              "enum": [
+                "mean",
+                "last",
+                "first",
+                "min",
+                "max",
+                "median"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reduce"
+        },
+        "ref_uris": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref Uris"
+        },
+        "rename": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Rename",
+          "type": "object"
+        },
+        "resample": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputResample"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "resolve": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolve"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "sparql": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sparql"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "streams": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/StreamName"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams"
+        },
+        "study": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Study"
+        },
+        "timezone": {
+          "default": "UTC",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "units": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Units"
+        }
+      },
+      "title": "ModelInput",
+      "type": "object"
+    },
+    "ModelInputsSweep": {
+      "additionalProperties": false,
+      "description": "Each task sets model variables from one of ``values``' sets of data (D21).\n\nAn entry in a set replaces the config's ``model_inputs`` entry for the same\npath, so a sweep can vary only the streams it names.\n\nAttributes:\n    name: The field ``output_name`` renders a set's label as;\n        ``model_inputs`` by default.\n    values: The sets; their labels must differ.",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "type": {
+          "const": "model_inputs",
+          "title": "Type",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/InputSet"
+          },
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "values"
+      ],
+      "title": "ModelInputsSweep",
       "type": "object"
     },
     "Prep": {
@@ -1101,7 +1454,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "A study as data; see :mod:`flex_orchestrator.study.config`.\n\nAttributes:\n    study: The study to run in, created if needed; the selected one if\n        omitted.\n    base_model_spec: The model spec every task builds from, unless a\n        ``spec_list`` sweep names others.\n    fits: ``fit_surrogate`` parameters, run before the sweeps.\n    hooks: See :class:`HooksConfig`.\n    sweeps: See :class:`SurrogateSweep`, :class:`VariableSweep`,\n        :class:`ConfigurationSweep`, :class:`SpecListSweep` and\n        :class:`CasesSweep`.\n    combine: ``product`` (every combination) or ``zip`` (the sweeps in\n        step; they must be the same length).\n    solve_options: Passed to the solve hook.\n    export: See :class:`ExportConfig`.\n    output_name: Each task's tag, e.g.\n        ``\"ro_{surrogate}_{plant.ro.recovery}\"``: fields are the sweeps'\n        names, plus ``base`` and ``index``. By default the base tag and\n        each sweep's value, joined by ``_``. A value is written exactly\n        (``str``; ``0.1 + 0.2`` gives ``0.30000000000000004``) unless the\n        field has a format spec, as in Python: ``{recovery:.3g}``,\n        ``{price:.2f}``. The tag is only a name: the values themselves are\n        stored in full with the result. Values that format alike make\n        tags that repeat, which is refused before anything runs.\n    on_existing: When a task's tag is stored: ``error`` (checked before\n        anything runs), ``skip`` it (resume), or ``replace`` it.\n    execution: See :class:`Execution`.",
+  "description": "A study as data; see :mod:`flex_orchestrator.study.config`.\n\nAttributes:\n    study: The study to run in, created if needed; the selected one if\n        omitted.\n    base_model_spec: The model spec every task builds from, unless a\n        ``spec_list`` sweep names others.\n    fits: ``fit_surrogate`` parameters, run before the sweeps.\n    model_inputs: Model variables every task sets from stored data (D21):\n        fit selectors, each column (after ``rename``) named by the path it\n        sets, lined up with the model's time steps.\n    hooks: See :class:`HooksConfig`.\n    sweeps: See :class:`SurrogateSweep`, :class:`VariableSweep`,\n        :class:`ConfigurationSweep`, :class:`SpecListSweep`,\n        :class:`ModelInputsSweep` and :class:`CasesSweep`.\n    combine: ``product`` (every combination) or ``zip`` (the sweeps in\n        step; they must be the same length).\n    solve_options: Passed to the solve hook.\n    export: See :class:`ExportConfig`.\n    output_name: Each task's tag, e.g.\n        ``\"ro_{surrogate}_{plant.ro.recovery}\"``: fields are the sweeps'\n        names, plus ``base`` and ``index``. By default the base tag and\n        each sweep's value, joined by ``_``. A value is written exactly\n        (``str``; ``0.1 + 0.2`` gives ``0.30000000000000004``) unless the\n        field has a format spec, as in Python: ``{recovery:.3g}``,\n        ``{price:.2f}``. The tag is only a name: the values themselves are\n        stored in full with the result. Values that format alike make\n        tags that repeat, which is refused before anything runs.\n    on_existing: When a task's tag is stored: ``error`` (checked before\n        anything runs), ``skip`` it (resume), or ``replace`` it.\n    execution: See :class:`Execution`.",
   "properties": {
     "base_model_spec": {
       "anyOf": [
@@ -1139,6 +1492,13 @@
     },
     "hooks": {
       "$ref": "#/$defs/HooksConfig"
+    },
+    "model_inputs": {
+      "items": {
+        "$ref": "#/$defs/ModelInput"
+      },
+      "title": "Model Inputs",
+      "type": "array"
     },
     "on_existing": {
       "default": "error",
@@ -1185,6 +1545,7 @@
           "mapping": {
             "cases": "#/$defs/CasesSweep",
             "configuration_option": "#/$defs/ConfigurationSweep",
+            "model_inputs": "#/$defs/ModelInputsSweep",
             "spec_list": "#/$defs/SpecListSweep",
             "surrogate": "#/$defs/SurrogateSweep",
             "variable": "#/$defs/VariableSweep"
@@ -1203,6 +1564,9 @@
           },
           {
             "$ref": "#/$defs/SpecListSweep"
+          },
+          {
+            "$ref": "#/$defs/ModelInputsSweep"
           },
           {
             "$ref": "#/$defs/CasesSweep"

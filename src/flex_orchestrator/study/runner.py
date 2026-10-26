@@ -28,12 +28,14 @@ from flex_orchestrator.ext.commands import Progress, command
 from flex_orchestrator.fitting.command import run_fits
 from flex_orchestrator.fitting.models import FitSummary
 from flex_orchestrator.hooks import HookSet
+from flex_orchestrator.inputs.models import InputSet, ModelInput
 from flex_orchestrator.orchestrator import RESULT_KIND
 from flex_orchestrator.specs import check_tag
 from flex_orchestrator.study.config import (
     Case,
     CasesSweep,
     ConfigurationSweep,
+    ModelInputsSweep,
     SpecListSweep,
     StudyConfig,
     SurrogateSweep,
@@ -211,7 +213,7 @@ def expand(cfg: StudyConfig) -> list[TaskSpec]:
                 raise StudyConfigError(
                     f"Two sweeps both render as {{{field}}}; give them names."
                 )
-            task.labels[field] = value.name if isinstance(value, Case) else value
+            task.labels[field] = _label(value)
             task.add(sweep, value)
         if task.base is None:
             raise StudyConfigError(
@@ -232,6 +234,8 @@ def expand(cfg: StudyConfig) -> list[TaskSpec]:
                 configuration=task.configuration,
                 surrogates=task.surrogates,
                 overrides=task.variables,
+                model_inputs=cfg.model_inputs,
+                swept_inputs=task.inputs,
                 labels=task.labels,
                 hooks=hooks,
                 export=cfg.export,
@@ -250,6 +254,7 @@ class _Choices:
         self.configuration: dict[str, Any] = {}
         self.variables: dict[str, Any] = {}
         self.surrogates: list[SurrogateChoice] = []
+        self.inputs: list[ModelInput] = []
         self.labels: dict[str, Any] = {}
 
     def add(self, sweep: Any, value: Any) -> None:
@@ -261,6 +266,8 @@ class _Choices:
             self.set(self.configuration, "configuration option", sweep.path, value)
         elif isinstance(sweep, SpecListSweep):
             self.spec(value)
+        elif isinstance(sweep, ModelInputsSweep):
+            self.inputs.extend(value.inputs)
         else:
             if value.spec is not None:
                 self.spec(value.spec)
@@ -270,6 +277,7 @@ class _Choices:
                 self.set(self.configuration, "configuration option", path, option)
             for path, fixed in value.variables.items():
                 self.set(self.variables, "variable", path, fixed)
+            self.inputs.extend(value.model_inputs)
 
     def set(self, into: dict, what: str, path: str, value: Any) -> None:
         if path in into:
@@ -296,6 +304,8 @@ def _values(sweep: Any) -> list[tuple[Any, Any]]:
         return [(sweep, value) for value in sweep.values]
     if isinstance(sweep, CasesSweep):
         return [(sweep, case) for case in sweep.cases]
+    if isinstance(sweep, ModelInputsSweep):
+        return [(sweep, value) for value in sweep.values]
     assert isinstance(sweep, SpecListSweep)
     return [(sweep, tag) for tag in sweep.specs]
 
@@ -309,7 +319,17 @@ def _field(sweep: Any) -> str:
         return sweep.path
     if isinstance(sweep, CasesSweep):
         return "case"
+    if isinstance(sweep, ModelInputsSweep):
+        return "model_inputs"
     return "spec"
+
+
+def _label(value: Any) -> Any:
+    if isinstance(value, Case):
+        return value.name
+    if isinstance(value, InputSet):
+        return value.label
+    return value
 
 
 def _render(cfg: StudyConfig, base: str, index: int, labels: dict[str, Any]) -> str:

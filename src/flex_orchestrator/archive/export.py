@@ -42,6 +42,7 @@ from flex_orchestrator.export import ModelData
 from flex_orchestrator.orchestrator import (
     _VERSION_KEYS,
     LEDGERS,
+    MODEL_INPUTS,
     MODEL_SPEC,
     MODEL_SPEC_REF,
     OVERRIDES,
@@ -295,7 +296,7 @@ def result_files(
     for handle in handles:
         data = handle.data()
         streams = [k for k in data.keys() if k in native]
-        labels = [MODEL_SPEC_REF, OVERRIDES, *streams]
+        labels = [MODEL_SPEC_REF, OVERRIDES, MODEL_INPUTS, *streams]
         found = {
             r.label: r.value for r in orch.backend.records(runs, handle.run_id, labels)
         }
@@ -308,6 +309,7 @@ def result_files(
             started_at=_iso(handle.started_at),
             model_spec_ref=found.get(MODEL_SPEC_REF),
             overrides=found.get(OVERRIDES) or {},
+            model_inputs=found.get(MODEL_INPUTS) or [],
             hooks=metadata.get("flexorch_hooks") or {},
             solve_outcome=outcome,
             metadata=metadata,
