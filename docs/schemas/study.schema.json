@@ -1,0 +1,88 @@
+{
+  "$id": "https://flex-orchestrator/schemas/flexorch-export/1/study.json",
+  "additionalProperties": false,
+  "description": "``study.json``: what the export holds, and how it was made.\n\nAttributes:\n    study: The exported study.\n    exported_at: When (UTC, ISO 8601).\n    exported_by: Who (``FLEXORCH_USER`` or the login name).\n    tenant: The tenant the study belongs to; ``None`` outside a tenant\n        stack (Phase 1).\n    versions: flex-orchestrator, flex-pse and Acquirium versions.\n    counts: How many files each part has.\n    options: The options the export was made with.\n    files: Every other file of the export, relative to its folder.",
+  "properties": {
+    "counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Counts",
+      "type": "object"
+    },
+    "exported_at": {
+      "title": "Exported At",
+      "type": "string"
+    },
+    "exported_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exported By"
+    },
+    "files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "options": {
+      "additionalProperties": true,
+      "title": "Options",
+      "type": "object"
+    },
+    "schema": {
+      "const": "flexorch-export/1",
+      "default": "flexorch-export/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "study": {
+      "title": "Study",
+      "type": "string"
+    },
+    "tenant": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tenant"
+    },
+    "versions": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Versions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "study",
+    "exported_at",
+    "versions",
+    "counts",
+    "options",
+    "files"
+  ],
+  "title": "StudyManifest",
+  "type": "object"
+}

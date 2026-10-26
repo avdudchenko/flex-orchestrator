@@ -1,0 +1,61 @@
+# One tenant's own Ray cluster (PLAN.md D13, D14): a head and N workers on the
+# tenant's internal network. Nothing here is shared between tenants.
+#
+#   TENANT=tenant_a IMAGE=flexorch-tenant:0.1 docker compose -p ray-tenant_a up -d \
+#       --scale ray-worker=2
+#
+# The orchestrator then runs studies with
+#   execute_study(cfg, max_workers=8, ray_address="ray://ray-head:10001")
+# or FLEXORCH_RAY_ADDRESS=ray://ray-head:10001.
+#
+# IMAGE is the tenant's orchestrator image (deploy/docker, M6): the workers
+# must have the same flex-orchestrator, flex-pse, solvers and plugin/hook
+# packages as the orchestrator, because they import hooks by name.
+
+x-ray-node: &ray-node
+  image: ${IMAGE:?set IMAGE to the tenant's orchestrator image}
+  user: "1000:1000" # non-root
+  read_only: true # Ray writes only to /tmp (a tmpfs) and the session dir
+  tmpfs:
+    - /tmp:size=2g,uid=1000,gid=1000
+  shm_size: ${RAY_SHM_SIZE:-2gb} # Ray's object store lives in /dev/shm
+  environment:
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+    RAY_USAGE_STATS_ENABLED: "0"
+  networks: [tenant]
+  # No docker.sock, no host mounts, no published ports: only the tenant's
+  # orchestrator, on the same internal network, can reach the head.
+  restart: unless-stopped
+
+services:
+  ray-head:
+    <<: *ray-node
+    hostname: ray-head
+    command: >
+      ray start --head --block
+      --port=6379 --ray-client-server-port=10001
+      --num-cpus=${RAY_HEAD_CPUS:-0}
+      --include-dashboard=false
+      --temp-dir=/tmp/ray
+    healthcheck:
+      test: ["CMD", "ray", "status", "--address=ray-head:6379"]
+      interval: 10s
+      retries: 12
+
+  ray-worker:
+    <<: *ray-node
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    command: >
+      ray start --address=ray-head:6379 --block
+      --num-cpus=${RAY_WORKER_CPUS:-8}
+      --temp-dir=/tmp/ray
+
+networks:
+  tenant:
+    # The tenant stack's internal network (deploy/tenant, M6), e.g. flexorch_tenant_a.
+    name: ${TENANT_NETWORK:-flexorch_${TENANT:?set TENANT}}
+    external: true

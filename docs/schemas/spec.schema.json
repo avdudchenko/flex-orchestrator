@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "AssetRef": {
+      "additionalProperties": false,
+      "description": "One stored file a spec references.\n\nAttributes:\n    name: The stored name, ``assets/<sha256[:12]>-<filename>``; the spec\n        holds this name where it held the path.\n    sha256: The file's sha256, hex.\n    size: The file's size in bytes.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "size"
+      ],
+      "title": "AssetRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://flex-orchestrator/schemas/flexorch-export/1/spec.json",
+  "additionalProperties": false,
+  "description": "``specs/models/<tag>.json`` or ``specs/surrogates/<tag>.json``.\n\nThe spec's referenced files are in ``specs/`` under their stored names\n(``specs/assets/<sha256[:12]>-<name>``).\n\nAttributes:\n    tag: The spec's tag.\n    kind: ``\"model_spec\"`` or ``\"surrogate_spec\"``.\n    spec_format: The spec's format.\n    spec_hash: Its hash, files included.\n    parent_tag: The spec it was derived from.\n    created_at: When it was stored.\n    created_by: Who stored it.\n    run_id: Its run in ``<s>::specs``.\n    versions: The versions that stored it.\n    metadata: The run's metadata (``fit_run_id`` for a fitted surrogate).\n    assets: ``{JSON pointer: AssetRef}`` for each referenced file.\n    spec: The spec.",
+  "properties": {
+    "assets": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AssetRef"
+      },
+      "title": "Assets",
+      "type": "object"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created At"
+    },
+    "created_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created By"
+    },
+    "kind": {
+      "enum": [
+        "model_spec",
+        "surrogate_spec"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "parent_tag": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Tag"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema": {
+      "const": "flexorch-export/1",
+      "default": "flexorch-export/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "spec": {
+      "additionalProperties": true,
+      "title": "Spec",
+      "type": "object"
+    },
+    "spec_format": {
+      "title": "Spec Format",
+      "type": "string"
+    },
+    "spec_hash": {
+      "title": "Spec Hash",
+      "type": "string"
+    },
+    "tag": {
+      "title": "Tag",
+      "type": "string"
+    },
+    "versions": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Versions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "tag",
+    "kind",
+    "spec_format",
+    "spec_hash",
+    "run_id",
+    "spec"
+  ],
+  "title": "SpecFile",
+  "type": "object"
+}

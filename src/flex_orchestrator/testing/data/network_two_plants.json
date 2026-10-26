@@ -1,0 +1,131 @@
+{
+  "schema_version": "0.1.0",
+  "name": "network",
+  "elements": [
+    {
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-02",
+      "time_step": "1 h",
+      "kind": "time"
+    },
+    {
+      "property_class": "SimpleAqueousFlow",
+      "kind": "property_package",
+      "name": "properties"
+    },
+    {
+      "kind": "costing",
+      "name": "costing",
+      "energy_prices": {
+        "electrical": {
+          "value": 0.1,
+          "units": "USD/kWh"
+        }
+      }
+    },
+    {
+      "kind": "network",
+      "name": "net"
+    },
+    {
+      "kind": "plant",
+      "name": "net.a"
+    },
+    {
+      "kind": "unit",
+      "name": "net.a.tank",
+      "unit_model_class": "Tank",
+      "costing_package": null,
+      "connections": [
+        {
+          "port": "outlet",
+          "to": "net.a.pump.inlet",
+          "name": "tank_to_pump"
+        }
+      ],
+      "io_variables": [
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "volume",
+          "role": "output",
+          "units": "m^3"
+        }
+      ]
+    },
+    {
+      "kind": "unit",
+      "name": "net.a.pump",
+      "unit_model_class": "ConstantEnergyIntensityModel",
+      "construction_options": {
+        "energy_intensity": {
+          "value": 0.4,
+          "units": "kWh/m^3"
+        }
+      },
+      "connections": [
+        {
+          "port": "outlet",
+          "to": "net.b.tank.inlet",
+          "name": "a_to_b",
+          "doc": "Transfer main from plant a to plant b."
+        }
+      ],
+      "io_variables": [
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "flow_vol_phase",
+          "role": "output",
+          "units": "m^3/h"
+        },
+        {
+          "name": "power_electrical",
+          "role": "output",
+          "units": "kW"
+        }
+      ]
+    },
+    {
+      "kind": "plant",
+      "name": "net.b"
+    },
+    {
+      "kind": "unit",
+      "name": "net.b.tank",
+      "unit_model_class": "Tank",
+      "costing_package": null,
+      "io_variables": [
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "volume",
+          "role": "output",
+          "units": "m^3"
+        }
+      ]
+    },
+    {
+      "kind": "objective"
+    }
+  ]
+}

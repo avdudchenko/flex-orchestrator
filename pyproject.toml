@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flex-orchestrator"
+version = "0.1.0.dev0"
+description = "Run, store and query flex-pse studies on an Acquirium experiment ledger"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "polars>=1",
+    "pandas>=2",
+    "pyyaml>=6",
+]
+
+[project.scripts]
+flex-orch = "flex_orchestrator.cli:main"
+
+[project.optional-dependencies]
+# flex-pse is not on PyPI yet: the conda env files install it from a pinned git
+# SHA (deployment) or the sibling checkout (development) before this package.
+flexpse = ["flex-pse[parameterize,solvers]"]
+# The Acquirium backend; Acquirium (PR #78) is installed the same way as flex-pse.
+acquirium = ["acquirium", "requests"]
+# Parallel studies and fits (max_workers > 1, D13); Acquirium installs it too.
+ray = ["ray>=2.59"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-timeout",
+    "import-linter",
+    "jsonschema",
+    "ruff==0.15.20",
+    "black==26.5.1",
+    "pre-commit",
+]
+# The model data exporter (flex_orchestrator.export) needs pyomo; flex-pse brings it.
+pyomo = ["pyomo>=6.8"]
+docs = ["sphinx", "myst-parser", "furo"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flex_orchestrator"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --import-mode=importlib"
+testpaths = ["src"]
+markers = [
+    "unit: fast, no database, no solver; the TDD inner loop",
+    "component: embedded Acquirium and/or small solves with HiGHS/IPOPT",
+    "integration: tenant stacks, example scripts, isolation suite, restore drill",
+    "benchmark: opt-in load tests",
+    "on_acquirium: run on the shared Acquirium as well as memory and files",
+    "needs_highs: skip if the HiGHS solver is unavailable",
+    "needs_ipopt: skip if the IPOPT solver is unavailable",
+    "needs_scip: skip if the SCIP solver is unavailable",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/flex_orchestrator"]
+# Tests live next to the code they test (src/**/tests/); don't count them.
+omit = ["*/tests/*"]
+
+[tool.ruff.lint]
+# flex-pse's rule set plus "D", so the docstring convention is actually enforced
+# (PLAN.md D20).
+select = ["E", "F", "I", "B", "UP", "D"]
+pydocstyle.convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["D"]
+"conftest.py" = ["D"]
+"examples/**" = ["D"]
+"docs/**" = ["D"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]

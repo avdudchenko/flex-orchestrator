@@ -11,8 +11,8 @@ dependencies:
   - highspy=1.15
   - pip
   - pip:
-      # flex-pse @ arima_integration
-      - "flex-pse[parameterize,solvers] @ git+https://github.com/avdudchenko/flex-pse.git@1fe4059e233796b6dec263ff3c72eb06a8fad3a8"
-      # Acquirium PR #78 (experiment-interface) - switch to a PyPI release once merged
-      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@a74b3bcd682a781bdefac93cc17d415153672dd8"
+      # flex-pse v0.2.0 (upstream tag; flowsheet spec schema 0.1.0)
+      - "flex-pse[parameterize,solvers] @ git+https://github.com/flex-pse/flex-pse.git@b3cc361681b34da65aa38afb413a5e73fd189941"
+      # Acquirium main (PR #78 merged) - switch to a PyPI release once one has it
+      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
       # - "flex-orchestrator[server] @ ."   # enable once M0 adds pyproject.toml

@@ -1,0 +1,77 @@
+[importlinter]
+root_packages =
+    flex_orchestrator
+include_external_packages = True
+
+# PLAN.md §3 layering. The "nothing imports server/" contract is added in M7,
+# when flex_orchestrator.server exists.
+
+[importlinter:contract:no-http-in-core]
+name = the core library never imports HTTP frameworks
+type = forbidden
+source_modules =
+    flex_orchestrator
+forbidden_modules =
+    fastapi
+    starlette
+
+[importlinter:contract:format-agnostic-core]
+name = hooks, specs, errors, testing and the config models don't import pyomo, flex-pse or Acquirium
+type = forbidden
+# The plugin-test helpers build an orchestrator only when called; the fake
+# hooks and specs stay importable without pyomo.
+ignore_imports =
+    flex_orchestrator.testing.orchestrators -> flex_orchestrator.backend
+    flex_orchestrator.testing.orchestrators -> flex_orchestrator.ext
+source_modules =
+    flex_orchestrator.hooks
+    flex_orchestrator.specs
+    flex_orchestrator.errors
+    flex_orchestrator.testing
+    flex_orchestrator.study.config
+    flex_orchestrator.fitting.models
+    flex_orchestrator.ext.commands
+    flex_orchestrator.ext.events
+forbidden_modules =
+    pyomo
+    flexcore
+    flexops
+    flexparameterize
+    acquirium
+
+[importlinter:contract:exporter-pyomo-only]
+name = the exporter depends only on pyomo, not flex-pse or Acquirium
+type = forbidden
+source_modules =
+    flex_orchestrator.export
+forbidden_modules =
+    flexcore
+    flexops
+    flexparameterize
+    acquirium
+
+[importlinter:contract:acquirium-only-in-backend]
+name = only backend.acquirium and connection talk to Acquirium; the orchestrator uses hooks, not flex-pse
+type = forbidden
+# The orchestrator reaches Acquirium only through connection.connect (D11),
+# which imports Acquirium lazily and builds the backend.
+ignore_imports =
+    flex_orchestrator.orchestrator -> flex_orchestrator.connection
+source_modules =
+    flex_orchestrator.orchestrator
+    flex_orchestrator.results
+    flex_orchestrator.backend.base
+    flex_orchestrator.backend.memory
+    flex_orchestrator.backend.files
+    flex_orchestrator.ext
+    flex_orchestrator.fitting
+    flex_orchestrator.study
+    flex_orchestrator.archive
+    flex_orchestrator.cli
+    flex_orchestrator.parallel
+forbidden_modules =
+    acquirium
+    requests
+    flexcore
+    flexops
+    flexparameterize

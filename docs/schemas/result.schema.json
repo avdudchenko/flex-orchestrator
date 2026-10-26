@@ -1,0 +1,291 @@
+{
+  "$defs": {
+    "ResultScalar": {
+      "additionalProperties": false,
+      "description": "One scalar of a result file (see :class:`ResultSeries`).",
+      "properties": {
+        "component": {
+          "title": "Component",
+          "type": "string"
+        },
+        "index": {
+          "items": {},
+          "title": "Index",
+          "type": "array"
+        },
+        "pyomo_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pyomo Unit"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "unit_verified": {
+          "default": false,
+          "title": "Unit Verified",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "component",
+        "value"
+      ],
+      "title": "ResultScalar",
+      "type": "object"
+    },
+    "ResultSeries": {
+      "additionalProperties": false,
+      "description": "One timeseries of a result file.\n\nAttributes:\n    unit: The QUDT key.\n    pyomo_unit: The Pyomo unit.\n    unit_verified: Whether the QUDT key is confirmed.\n    component: The Pyomo component.\n    index: Its custom index (``[]`` for none), JSON values of their types.\n    values: One per ``time_index`` timestamp; ``null`` where missing.\n    rows: For a series covering only part of time (``startup``), the\n        positions in ``time_index`` it covers; all of them if omitted.",
+      "properties": {
+        "component": {
+          "title": "Component",
+          "type": "string"
+        },
+        "index": {
+          "items": {},
+          "title": "Index",
+          "type": "array"
+        },
+        "pyomo_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pyomo Unit"
+        },
+        "rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rows"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "unit_verified": {
+          "default": false,
+          "title": "Unit Verified",
+          "type": "boolean"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "component",
+        "values"
+      ],
+      "title": "ResultSeries",
+      "type": "object"
+    },
+    "TimeIndex": {
+      "additionalProperties": false,
+      "description": "A result's timestamps, stored once.\n\nAttributes:\n    timestamps: UTC, ISO 8601; every timeseries lines up with them.",
+      "properties": {
+        "timestamps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Timestamps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "timestamps"
+      ],
+      "title": "TimeIndex",
+      "type": "object"
+    }
+  },
+  "$id": "https://flex-orchestrator/schemas/flexorch-export/1/result.json",
+  "additionalProperties": false,
+  "description": "``results/<tag>.json``: one stored result (D3, D4).\n\nAttributes:\n    tag: The result's tag.\n    run_id: Its run in ``<s>::runs``.\n    status: ``\"succeeded\"`` (only stored results are exported).\n    started_at: When its run started.\n    model_spec_ref: ``{tag, spec_hash}`` of the spec it was built from.\n    overrides: The build overrides.\n    hooks: The hooks that built and solved it.\n    solve_outcome: How the solve ended.\n    metadata: The run's metadata.\n    streams: The keys also stored as native variables.\n    keys: Every key, in the order the model was walked.\n    time_index: The timestamps.\n    timeseries: ``{key: ResultSeries}``.\n    scalars: ``{key: ResultScalar}``.\n    stale: Keys with missing values.",
+  "properties": {
+    "hooks": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Hooks",
+      "type": "object"
+    },
+    "keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Keys",
+      "type": "array"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "model_spec_ref": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model Spec Ref"
+    },
+    "overrides": {
+      "additionalProperties": true,
+      "title": "Overrides",
+      "type": "object"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "scalars": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ResultScalar"
+      },
+      "title": "Scalars",
+      "type": "object"
+    },
+    "schema": {
+      "const": "flexorch-export/1",
+      "default": "flexorch-export/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "solve_outcome": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Solve Outcome"
+    },
+    "stale": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Stale",
+      "type": "array"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At"
+    },
+    "status": {
+      "const": "succeeded",
+      "default": "succeeded",
+      "title": "Status",
+      "type": "string"
+    },
+    "streams": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Streams",
+      "type": "array"
+    },
+    "tag": {
+      "title": "Tag",
+      "type": "string"
+    },
+    "time_index": {
+      "$ref": "#/$defs/TimeIndex"
+    },
+    "timeseries": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ResultSeries"
+      },
+      "title": "Timeseries",
+      "type": "object"
+    }
+  },
+  "required": [
+    "tag",
+    "run_id",
+    "time_index",
+    "timeseries",
+    "scalars"
+  ],
+  "title": "ResultFile",
+  "type": "object"
+}

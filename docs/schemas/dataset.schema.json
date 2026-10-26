@@ -1,0 +1,128 @@
+{
+  "$defs": {
+    "DatasetColumn": {
+      "additionalProperties": false,
+      "description": "One column of a dataset file.\n\nAttributes:\n    unit: The unit as the user wrote it.\n    qudt_unit: Its QUDT key, if one was found.\n    values: One per ``time_index`` entry; ``null`` where missing.",
+      "properties": {
+        "qudt_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qudt Unit"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "title": "DatasetColumn",
+      "type": "object"
+    }
+  },
+  "$id": "https://flex-orchestrator/schemas/flexorch-export/1/dataset.json",
+  "additionalProperties": false,
+  "description": "``data/<name>.json``: one dataset (D6).\n\nAttributes:\n    name: The dataset's name.\n    run_id: Its run in ``<s>::data``.\n    created_at: When it was stored.\n    created_by: Who stored it.\n    time_index: UTC timestamps, ISO 8601.\n    columns: ``{column: DatasetColumn}``, in order.\n    metadata: The run's metadata.\n    manifest: The dataset's stored manifest.",
+  "properties": {
+    "columns": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DatasetColumn"
+      },
+      "title": "Columns",
+      "type": "object"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created At"
+    },
+    "created_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created By"
+    },
+    "manifest": {
+      "additionalProperties": true,
+      "title": "Manifest",
+      "type": "object"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema": {
+      "const": "flexorch-export/1",
+      "default": "flexorch-export/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "time_index": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Time Index",
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "run_id",
+    "time_index",
+    "columns"
+  ],
+  "title": "DatasetFile",
+  "type": "object"
+}

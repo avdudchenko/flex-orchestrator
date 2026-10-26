@@ -1,0 +1,90 @@
+{
+  "schema_version": "0.1.0",
+  "name": "indexed_logic",
+  "elements": [
+    {
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-01T06:00",
+      "time_step": "1 h",
+      "kind": "time"
+    },
+    {
+      "property_class": "SimpleAqueousFlow",
+      "kind": "property_package",
+      "name": "properties"
+    },
+    {
+      "kind": "costing",
+      "name": "costing",
+      "energy_prices": {
+        "electrical": {
+          "value": 0.1,
+          "units": "USD/kWh"
+        }
+      }
+    },
+    {
+      "kind": "plant",
+      "name": "p"
+    },
+    {
+      "kind": "unit",
+      "name": "p.ro",
+      "unit_model_class": "ConstantEnergyIntensityModel",
+      "construction_options": {
+        "energy_intensity": {
+          "value": 0.3,
+          "units": "kWh/m^3"
+        }
+      },
+      "index": "p.trains",
+      "io_variables": [
+        {
+          "name": "flow_vol_phase",
+          "role": "input",
+          "units": "m^3/h"
+        },
+        {
+          "name": "flow_vol_phase",
+          "role": "output",
+          "units": "m^3/h"
+        },
+        {
+          "name": "power_electrical",
+          "role": "output",
+          "units": "kW"
+        }
+      ]
+    },
+    {
+      "kind": "set",
+      "name": "p.trains",
+      "values": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "status",
+      "unit": "p.ro",
+      "variable": "power_electrical",
+      "min_output": {
+        "value": 0.0,
+        "units": "kW"
+      },
+      "max_output": {
+        "value": 40.0,
+        "units": "kW"
+      }
+    },
+    {
+      "kind": "startup_shutdown",
+      "unit": "p.ro",
+      "min_up": 2
+    },
+    {
+      "kind": "objective"
+    }
+  ]
+}

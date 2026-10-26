@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "FitSeries": {
+      "additionalProperties": false,
+      "description": "A fit's ``actual`` / ``fitted`` / ``residual`` series.",
+      "properties": {
+        "actual": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Actual",
+          "type": "array"
+        },
+        "fitted": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Fitted",
+          "type": "array"
+        },
+        "residual": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Residual",
+          "type": "array"
+        },
+        "time_index": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Index",
+          "type": "array"
+        }
+      },
+      "required": [
+        "time_index",
+        "actual",
+        "fitted",
+        "residual"
+      ],
+      "title": "FitSeries",
+      "type": "object"
+    }
+  },
+  "$id": "https://flex-orchestrator/schemas/flexorch-export/1/fit.json",
+  "additionalProperties": false,
+  "description": "``fits/<tag>.json``: one fit run (D19).\n\nAttributes:\n    tag: The fit's tag (its surrogate spec's).\n    run_id: Its run in ``<s>::fits``.\n    started_at: When it ran.\n    metadata: The run's metadata.\n    fit_params: The fit as planned.\n    training_data: What the data resolved to, and how it was prepared.\n    fit_result: Coefficients, metrics and diagnostics.\n    series: The fitted series, if stored.",
+  "properties": {
+    "fit_params": {
+      "additionalProperties": true,
+      "title": "Fit Params",
+      "type": "object"
+    },
+    "fit_result": {
+      "additionalProperties": true,
+      "title": "Fit Result",
+      "type": "object"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema": {
+      "const": "flexorch-export/1",
+      "default": "flexorch-export/1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "series": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FitSeries"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At"
+    },
+    "tag": {
+      "title": "Tag",
+      "type": "string"
+    },
+    "training_data": {
+      "additionalProperties": true,
+      "title": "Training Data",
+      "type": "object"
+    }
+  },
+  "required": [
+    "tag",
+    "run_id",
+    "fit_params",
+    "training_data",
+    "fit_result"
+  ],
+  "title": "FitFile",
+  "type": "object"
+}
