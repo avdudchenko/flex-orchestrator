@@ -21,6 +21,9 @@ operating data and the emitted base spec (`new_study`), the surrogate fits
 python examples/ro_study/sweep_surrogates.py
 ```
 
+The scripts keep their data in `examples/ro_study/tmp_flexorch`, which each
+deletes at its start; set `FLEXORCH_KEEP_EXAMPLE_STORE=1` to keep it.
+
 ## The sweep types
 
 ```python
@@ -132,6 +135,6 @@ sweep_cases:          linear_tight_feed $1,507.82  fixed_loose_feed $1,285.96  a
 Each case matches the same combination in the other scripts.
 
 Written to a YAML or JSON file, any of these configs runs from the command
-line: `flex-orch --data-dir examples/ro_study/.flexorch run study.yaml --study
+line: `flex-orch --data-dir examples/ro_study/tmp_flexorch run study.yaml --study
 my_study`. `orch.execute_study(STUDY, dry_run=True)` (or `--dry-run`) returns
 the planned tasks without running anything.

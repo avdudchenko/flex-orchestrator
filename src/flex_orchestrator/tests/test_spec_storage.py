@@ -1,7 +1,7 @@
 """Stored specs, their files, building from them, and results linked to them.
 
-PLAN.md D2 and D10 (``<s>::specs``). Each test runs on the memory backend (unit
-tier) and a local Acquirium (component tier).
+PLAN.md D2 and D10 (``<s>::specs``). Each test runs on memory and files (unit
+tier); the tariff rebuild also runs on the shared Acquirium (component tier).
 """
 
 import copy
@@ -64,6 +64,7 @@ def test_store_and_read_a_model_spec(orch):
     assert [r.tag for r in orch.stored_specs()] == ["base"]
 
 
+@pytest.mark.on_acquirium
 def test_a_spec_with_a_tariff_rebuilds_from_anywhere(
     orch, tariff_dir, tmp_path, monkeypatch
 ):

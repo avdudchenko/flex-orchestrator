@@ -89,7 +89,7 @@
     },
     "Selector": {
       "additionalProperties": false,
-      "description": "Where one or more columns of fit data come from.\n\nExactly one source key is set:\n\n- ``dataset`` (with optional ``study`` and ``columns``): a dataset of this\n  study, or of another study in the same store;\n- ``result`` (with ``keys``): exported values of a stored result;\n- ``ref_uris``: streams of the general store, by reference URI;\n- ``resolve``: the one general-store stream whose label matches this text;\n- ``sparql``: a read-only SPARQL ``SELECT`` whose first column is stream\n  references.\n\nAttributes:\n    start: Only rows at or after this time.\n    end: Only rows at or before this time.\n    units: Units to convert to: one for every column, or ``{column: unit}``\n        (after ``rename``). A Pyomo unit (``\"m^3/hr\"``) or a QUDT key\n        (``\"M3-PER-HR\"``).\n    rename: ``{column: new name}``, or ``{\"*\": name}`` for a selector with\n        one column. The surrogate's variable names are the column names,\n        so they must be the unit's variable names.",
+      "description": "Where one or more columns of fit data come from.\n\nExactly one source key is set:\n\n- ``dataset`` (with optional ``study`` and ``columns``): a dataset of this\n  study, or of another study in the same store;\n- ``result`` (with ``keys``): exported values of a stored result;\n- ``ref_uris``: streams of the general store, by reference URI;\n- ``streams``: streams of the general store, by ``source_id`` and\n  ``ref_name``;\n- ``resolve``: the one general-store stream whose label matches this text;\n- ``sparql``: a read-only SPARQL ``SELECT`` whose first column is stream\n  references.\n\nAttributes:\n    start: Only rows at or after this time.\n    end: Only rows at or before this time.\n    units: Units to convert to: one for every column, or ``{column: unit}``\n        (after ``rename``). A Pyomo unit (``\"m^3/hr\"``) or a QUDT key\n        (``\"M3-PER-HR\"``).\n    rename: ``{column: new name}``, or ``{\"*\": name}`` for a selector with\n        one column. The surrogate's variable names are the column names,\n        so they must be the unit's variable names.",
       "properties": {
         "columns": {
           "anyOf": [
@@ -217,6 +217,21 @@
           "default": null,
           "title": "Start"
         },
+        "streams": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/StreamName"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Streams"
+        },
         "study": {
           "anyOf": [
             {
@@ -249,6 +264,26 @@
         }
       },
       "title": "Selector",
+      "type": "object"
+    },
+    "StreamName": {
+      "additionalProperties": false,
+      "description": "A general-store stream by the names its driver registered it with.\n\nAttributes:\n    source_id: The datasource, e.g. ``\"historian\"``.\n    ref_name: The stream's name in that source, e.g. ``\"FT_101\"``.",
+      "properties": {
+        "ref_name": {
+          "title": "Ref Name",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "ref_name"
+      ],
+      "title": "StreamName",
       "type": "object"
     },
     "Validation": {

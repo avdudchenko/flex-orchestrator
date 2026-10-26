@@ -1,6 +1,6 @@
 """What every study script here shares: the ro_surrogates model, data and fits.
 
-``new_study(name)`` opens the local store, starts the study afresh, and stores
+``new_study(name)`` opens a fresh local store, starts the study, and stores
 the operating data and the emitted base spec, so each script only has its
 study config to show.
 """
@@ -15,7 +15,14 @@ from flex_orchestrator import Orchestrator
 HERE = Path(__file__).parent
 MODEL = HERE.parent / "ro_surrogates"  # the model, its tariff file and its data
 sys.path.insert(0, str(MODEL))
-from example import KEEP, UNITS, compare, operating_data, ro_model  # noqa: E402, F401
+from example import (  # noqa: E402, F401
+    KEEP,
+    UNITS,
+    compare,
+    fresh_store,
+    operating_data,
+    ro_model,
+)
 
 # Fits the two surrogates from the stored data, as the "fits" of a study.
 FITS = [
@@ -36,9 +43,10 @@ EXPORT = {"include": KEEP}
 def new_study(name: str, orch: Orchestrator | None = None) -> Orchestrator:
     """Start a fresh study holding the data and base spec.
 
-    In ``orch``, or in the local store, opened here, if it's ``None``.
+    In ``orch``, or, if it's ``None``, in a fresh local store (see
+    ``fresh_store``) opened here.
     """
-    orch = orch or Orchestrator(data_dir=HERE / ".flexorch")
+    orch = orch or Orchestrator(data_dir=fresh_store(HERE))
     if name in orch.studies():
         orch.delete_study(name)
     orch.create_study(name)

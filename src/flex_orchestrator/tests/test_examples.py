@@ -1,7 +1,8 @@
 """Every example runs from start to finish (PLAN.md §7, integration tier).
 
-Each runs in its own process with its own Acquirium, so it doesn't share the
-session's server.
+Each runs in its own process. Processes on one data directory share its
+Acquirium, so a holder process starts it once for all of them; starting one
+takes about half a minute.
 
 - The step-by-step RO example, the five study-config ones, and the surrogate
   sweep stored on disk (no Acquirium).
@@ -16,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -38,8 +40,47 @@ def run(command: list[str], env: dict | None = None, cwd: Path | None = None) ->
     return done.stdout
 
 
-def script(path: Path, *args: str) -> str:
-    return run([sys.executable, str(path), *args])
+def script(path: Path, *args: str, env: dict | None = None) -> str:
+    return run([sys.executable, str(path), *args], env=env)
+
+
+HOLD = """
+import sys
+from flex_orchestrator.connection import connect
+
+connection = connect(data_dir=sys.argv[1])
+print("ready", flush=True)
+sys.stdin.read()
+connection.close()
+"""
+
+
+@contextmanager
+def shared_acquirium(data_dir: Path):
+    """Keep ``data_dir``'s Acquirium running while the block runs.
+
+    Its first process owns a server and stops it on exit; the others attach.
+    The holder is that first process, so each script attaches to it.
+    """
+    holder = subprocess.Popen(
+        [sys.executable, "-c", HOLD, str(data_dir)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        lines = []
+        for line in holder.stdout:
+            if line.strip() == "ready":
+                break
+            lines.append(line)
+        else:
+            raise AssertionError("Acquirium didn't start:\n" + "".join(lines))
+        yield
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=120)
 
 
 @pytest.mark.needs_highs
@@ -64,6 +105,20 @@ STUDY_TAGS = {
 }
 
 
+@pytest.fixture(scope="module")
+def ro_study_acquirium():
+    """A fresh ``ro_study/tmp_flexorch`` and its Acquirium, kept running.
+
+    Yields the scripts' environment, which tells them to keep the store:
+    its server holds it open.
+    """
+    pytest.importorskip("acquirium")
+    store = EXAMPLES / "ro_study" / "tmp_flexorch"
+    shutil.rmtree(store, ignore_errors=True)
+    with shared_acquirium(store):
+        yield {**os.environ, "FLEXORCH_KEEP_EXAMPLE_STORE": "1"}
+
+
 @pytest.fixture
 def export_folder():
     """``sweep_nested``'s export folder, removed before and after the test."""
@@ -75,10 +130,9 @@ def export_folder():
 
 @pytest.mark.needs_highs
 @pytest.mark.parametrize("name", sorted(STUDY_TAGS))
-def test_ro_study(name, export_folder):
-    pytest.importorskip("acquirium")
+def test_ro_study(name, export_folder, ro_study_acquirium):
     pytest.importorskip("flexparameterize")
-    out = "\n" + script(EXAMPLES / "ro_study" / f"{name}.py")
+    out = "\n" + script(EXAMPLES / "ro_study" / f"{name}.py", env=ro_study_acquirium)
     for tag in STUDY_TAGS[name]:
         assert f"\n{tag}: $" in out
     if name == "sweep_nested":
@@ -153,28 +207,33 @@ def test_the_sample_plugin(tmp_path):
     enabled = {**base, "FLEXORCH_PLUGINS": "ro_tools"}
     data = str(tmp_path / "store")
     populate = [sys.executable, "-c", POPULATE, data]
+    with shared_acquirium(tmp_path / "store"):
+        # Installed but not in the allowlist: not loaded.
+        assert json.loads(run(populate, env=base)) == {"loaded": False}
 
-    # Installed but not in the allowlist: not loaded.
-    assert json.loads(run(populate, env=base)) == {"loaded": False}
-
-    found = json.loads(run(populate, env=enabled))
-    assert found == {
-        "loaded": True,
-        "class": "ROOrchestrator",
-        "stamp": "0.1.0",
-        "table": {"a": 1.25, "b": 2.5},
-    }
-    cli = [sys.executable, "-m", "flex_orchestrator.cli", "--data-dir", data]
-    from_cli = run([*cli, "cmd", "cost_table", "--study", "plugin_demo"], env=enabled)
-    assert json.loads(from_cli) == found["table"]
-    exported = json.loads(
-        run([*cli, "export", "plugin_demo", str(tmp_path / "export")], env=enabled)
-    )
-    assert exported["counts"]["results"] == 2
-    imported = json.loads(
-        run([*cli, "import", str(tmp_path / "export"), "--name", "copy"], env=enabled)
-    )
-    assert imported["counts"]["results"] == 2
+        found = json.loads(run(populate, env=enabled))
+        assert found == {
+            "loaded": True,
+            "class": "ROOrchestrator",
+            "stamp": "0.1.0",
+            "table": {"a": 1.25, "b": 2.5},
+        }
+        cli = [sys.executable, "-m", "flex_orchestrator.cli", "--data-dir", data]
+        from_cli = run(
+            [*cli, "cmd", "cost_table", "--study", "plugin_demo"], env=enabled
+        )
+        assert json.loads(from_cli) == found["table"]
+        exported = json.loads(
+            run([*cli, "export", "plugin_demo", str(tmp_path / "export")], env=enabled)
+        )
+        assert exported["counts"]["results"] == 2
+        imported = json.loads(
+            run(
+                [*cli, "import", str(tmp_path / "export"), "--name", "copy"],
+                env=enabled,
+            )
+        )
+        assert imported["counts"]["results"] == 2
 
     # The plugin's own tests, from the installed copy.
     run(

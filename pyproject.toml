@@ -51,6 +51,7 @@ markers = [
     "component: embedded Acquirium and/or small solves with HiGHS/IPOPT",
     "integration: tenant stacks, example scripts, isolation suite, restore drill",
     "benchmark: opt-in load tests",
+    "on_acquirium: run on the shared Acquirium as well as memory and files",
     "needs_highs: skip if the HiGHS solver is unavailable",
     "needs_ipopt: skip if the IPOPT solver is unavailable",
     "needs_scip: skip if the SCIP solver is unavailable",

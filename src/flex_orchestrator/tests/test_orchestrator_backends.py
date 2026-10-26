@@ -1,7 +1,7 @@
 """Results round-trip on every backend: export -> store -> read back (PLAN.md §7).
 
-Each test runs on the memory backend (unit tier) and a local Acquirium
-(component tier).
+Each test runs on memory and files (unit tier) and the shared Acquirium
+(component tier): storing results is what these tests are about.
 """
 
 from datetime import UTC
@@ -16,6 +16,8 @@ from flex_orchestrator.orchestrator import Orchestrator
 
 SELECTION = ["costing.aggregate*", "costing.annualized_cost", "demo.pump.*"]
 OK = SolveOutcome(status="ok", termination="optimal")
+
+pytestmark = pytest.mark.on_acquirium
 
 
 def test_round_trip(orch, demo_model):

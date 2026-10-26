@@ -13,6 +13,6 @@ dependencies:
   - pip:
       # flex-pse v0.2.0 (upstream tag; flowsheet spec schema 0.1.0)
       - "flex-pse[parameterize,solvers] @ git+https://github.com/flex-pse/flex-pse.git@b3cc361681b34da65aa38afb413a5e73fd189941"
-      # Acquirium PR #78 (experiment-interface) - switch to a PyPI release once merged
-      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@9a70a1f8e90f7001f21632267fa59b65dc584fc0"
+      # Acquirium main (PR #78 merged) - switch to a PyPI release once one has it
+      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
       # - "flex-orchestrator[server] @ ."   # enable once M0 adds pyproject.toml

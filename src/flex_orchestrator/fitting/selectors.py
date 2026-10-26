@@ -28,7 +28,13 @@ from flex_orchestrator.orchestrator import LEDGERS
 _UPDATE = re.compile(
     r"\b(INSERT|DELETE|LOAD|CLEAR|DROP|CREATE|ADD|MOVE|COPY)\b", re.IGNORECASE
 )
-_STREAM_METHODS = ("stream_rows", "sparql_select", "stream_info", "find_streams")
+_STREAM_METHODS = (
+    "stream_rows",
+    "sparql_select",
+    "stream_info",
+    "find_streams",
+    "stream_ref",
+)
 
 
 @dataclass
@@ -153,6 +159,11 @@ def _streams(orch: Any, selector: Selector, start: Any, end: Any) -> Selected:
     provenance: dict[str, Any] = {"source": selector.source}
     if selector.source == "ref_uris":
         refs = list(dict.fromkeys(selector.ref_uris))
+    elif selector.source == "streams":
+        named = {
+            backend.stream_ref(s.source_id, s.ref_name): s for s in selector.streams
+        }
+        refs = list(named)
     elif selector.source == "resolve":
         found = backend.find_streams(selector.resolve)
         if len(found) != 1:
@@ -177,6 +188,13 @@ def _streams(orch: Any, selector: Selector, start: Any, end: Any) -> Selected:
         if not refs:
             raise FitError("The sparql selector's query returned no stream refs.")
     info = backend.stream_info(refs)
+    if selector.source == "streams":
+        for ref, stream in named.items():
+            if info[ref]["name"] is None:
+                raise FitError(
+                    f"There's no stream {stream.ref_name!r} from source "
+                    f"{stream.source_id!r}."
+                )
     columns, units = {}, {}
     for ref in refs:
         name = info[ref]["name"] or ref.rsplit("#", 1)[-1].rsplit("/", 1)[-1]

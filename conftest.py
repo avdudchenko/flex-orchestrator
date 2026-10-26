@@ -11,6 +11,7 @@ import importlib.util
 import pytest
 
 TIER_MARKERS = {"unit", "component", "integration", "benchmark"}
+BACKEND_TIERS = {"memory": "unit", "files": "unit", "acquirium": "component"}
 
 HAS_FLEXPSE = importlib.util.find_spec("flexops") is not None
 
@@ -159,6 +160,18 @@ def acquirium_local(acquirium_dir):
     aq.shutdown()
 
 
+def _make_backend(request, kind):
+    if kind == "memory":
+        return request.getfixturevalue("memory_backend")
+    if kind == "files":
+        from flex_orchestrator.backend import FileBackend
+
+        return FileBackend(request.getfixturevalue("tmp_path_factory").mktemp("files"))
+    from flex_orchestrator.backend import AcquiriumBackend
+
+    return AcquiriumBackend(request.getfixturevalue("acquirium_local"))
+
+
 @pytest.fixture(
     params=[
         pytest.param("memory", marks=pytest.mark.unit),
@@ -168,15 +181,40 @@ def acquirium_local(acquirium_dir):
 )
 def backend(request):
     """Each backend in turn: memory and files (unit tier), Acquirium (component)."""
-    if request.param == "memory":
-        return request.getfixturevalue("memory_backend")
-    if request.param == "files":
-        from flex_orchestrator.backend import FileBackend
+    return _make_backend(request, request.param)
 
-        return FileBackend(request.getfixturevalue("tmp_path_factory").mktemp("files"))
-    from flex_orchestrator.backend import AcquiriumBackend
 
-    return AcquiriumBackend(request.getfixturevalue("acquirium_local"))
+def pytest_generate_tests(metafunc):
+    """``orch_backend`` is memory and files; ``on_acquirium`` adds Acquirium.
+
+    A test with no tier marker of its own gets one per backend: unit for
+    memory and files, component for Acquirium.
+    """
+    if "orch_backend" not in metafunc.fixturenames:
+        return
+    kinds = ["memory", "files"]
+    if metafunc.definition.get_closest_marker("on_acquirium"):
+        kinds.append("acquirium")
+    tiered = TIER_MARKERS & {m.name for m in metafunc.definition.iter_markers()}
+    params = [
+        pytest.param(
+            kind,
+            marks=() if tiered else getattr(pytest.mark, BACKEND_TIERS[kind]),
+            id=kind,
+        )
+        for kind in kinds
+    ]
+    metafunc.parametrize("orch_backend", params, indirect=True)
+
+
+@pytest.fixture
+def orch_backend(request):
+    """The backend ``orch`` runs on (see ``pytest_generate_tests``).
+
+    Acquirium is slow to write to, so only tests marked ``on_acquirium`` use
+    it: those about Acquirium itself, and one end-to-end test per feature.
+    """
+    return _make_backend(request, request.param)
 
 
 @pytest.fixture
@@ -188,10 +226,10 @@ def study_name():
 
 
 @pytest.fixture
-def orch(backend, study_name):
-    """An orchestrator on each backend, with a fresh study selected."""
+def orch(orch_backend, study_name):
+    """An orchestrator on each ``orch_backend``, with a fresh study selected."""
     from flex_orchestrator.orchestrator import Orchestrator
 
-    orchestrator = Orchestrator(backend)
+    orchestrator = Orchestrator(orch_backend)
     orchestrator.create_study(study_name)
     return orchestrator

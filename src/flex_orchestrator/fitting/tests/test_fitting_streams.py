@@ -61,7 +61,7 @@ def historian(acquirium_local):
         name: str(acquirium_local.stream(source, f"FT_{key}_{name}"))
         for name in ("feed", "biogas")
     }
-    return {"key": key, "refs": refs}
+    return {"key": key, "source": source, "refs": refs}
 
 
 @pytest.fixture
@@ -128,6 +128,25 @@ SELECT ?ref WHERE {{ <urn:test:{key}:feed> ref:hasExternalReference ?ref }}"""
         y={"ref_uris": [refs["biogas"]]},
     )
     assert summary["feed_mean"].coefficients["energy_intensity"] == pytest.approx(12.0)
+    by_name = aq_orch.fit_surrogate(
+        tag="by_name",
+        regressor="multilinear",
+        X={
+            "streams": [
+                {"source_id": historian["source"], "ref_name": f"FT_{key}_feed"}
+            ],
+            "rename": {"*": "flow_in"},
+        },
+        y={"ref_uris": [refs["biogas"]], "rename": {"*": "biogas_volume"}},
+    )
+    assert by_name["by_name"].coefficients["flow_in"] == pytest.approx(12.0)
+    with pytest.raises(FitError, match="no stream 'nope'"):
+        aq_orch.fit_surrogate(
+            tag="y",
+            regressor="multilinear",
+            X={"streams": [{"source_id": historian["source"], "ref_name": "nope"}]},
+            y={"ref_uris": [refs["biogas"]]},
+        )
     with pytest.raises(FitError, match="matched 2 streams"):
         aq_orch.fit_surrogate(
             tag="x", regressor="multilinear", X={"resolve": key}, y={"resolve": key}

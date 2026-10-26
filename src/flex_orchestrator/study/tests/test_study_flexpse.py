@@ -4,7 +4,8 @@ A feed -> RO -> tank -> product plant priced by a tariff file. One config
 fits two ``multilinear`` variants of the RO's power (two windows of a stored
 dataset) and a ``constant_intensity`` one, swaps each into the RO and solves.
 Running the fits again on the same data gives the same ``data_hash`` and
-identical specs. Each test runs on the memory backend and on Acquirium.
+identical specs. Each test runs on memory and files; the price sweep also
+runs on the shared Acquirium.
 """
 
 import copy
@@ -142,18 +143,11 @@ CONFIG = {
 }
 
 
-@pytest.fixture(
-    params=["memory", "acquirium"],
-)
-def study(request, tmp_path, study_name):
-    from flex_orchestrator.backend import AcquiriumBackend, MemoryBackend
+@pytest.fixture
+def study(orch_backend, tmp_path, study_name):
     from flex_orchestrator.orchestrator import Orchestrator
 
-    if request.param == "memory":
-        backend = MemoryBackend()
-    else:
-        backend = AcquiriumBackend(request.getfixturevalue("acquirium_local"))
-    orch = Orchestrator(backend, environ={})
+    orch = Orchestrator(orch_backend, environ={})
     orch.create_study(study_name)
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -259,6 +253,7 @@ def test_a_configuration_sweep_edits_construction_options(study):
     )
 
 
+@pytest.mark.on_acquirium
 def test_a_price_sweep_edits_the_costing_element(study):
     spec = ro_spec()
     costing = spec["elements"][2]

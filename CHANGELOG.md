@@ -44,6 +44,8 @@
 - A root `README.md`.
 
 ### Added
+- A `streams` fit selector names general-store streams by `source_id` and
+  `ref_name`, as their driver registered them, instead of by reference URI.
 - A file backend (PLAN.md M5.5): `FileBackend(path)` keeps every study in a
   folder on disk, with no Acquirium. It passes the same contract tests as
   the memory and Acquirium backends, and every orchestrator feature works on

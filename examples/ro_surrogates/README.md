@@ -28,8 +28,9 @@ script with no options:
 python examples/ro_surrogates/example.py
 ```
 
-It keeps its data in `examples/ro_surrogates/.flexorch` and starts the study
-again on each run. Its output ends with:
+It keeps its data in `examples/ro_surrogates/tmp_flexorch`, which it deletes
+at the start of each run; set `FLEXORCH_KEEP_EXAMPLE_STORE=1` to keep it. Its
+output ends with:
 
 ```
 average intensity: 2.976 kWh/m^3

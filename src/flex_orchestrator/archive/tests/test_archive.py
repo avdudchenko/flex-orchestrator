@@ -1,9 +1,9 @@
 """Study export and import (PLAN.md D17, the M3 exit).
 
-Each test runs on the memory backend (unit tier) and a local Acquirium
-(component tier), with a study holding a spec and its file, a derived spec, a
-dataset, a fit and results (one with a series covering part of time, a stale
-value and a non-string index).
+Each test runs on memory and files (unit tier); the import-export round trip
+also runs on the shared Acquirium (component tier). The study holds a spec and
+its file, a derived spec, a dataset, a fit and results (one with a series
+covering part of time, a stale value and a non-string index).
 """
 
 import gzip
@@ -259,6 +259,7 @@ def test_export_options(study, tmp_path):
     assert not list(tmp_path.glob(".*partial*"))
 
 
+@pytest.mark.on_acquirium
 def test_import_then_export_gives_the_same_files(study, tmp_path):
     first = study.export_study(tmp_path / "a").path
     original = study.study

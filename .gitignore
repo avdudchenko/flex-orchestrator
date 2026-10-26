@@ -13,5 +13,6 @@ docs/_build/
 .env
 .claude/
 .flexorch/
+tmp_flexorch/
 examples/ro_study/export/
 examples/ro_study/on_disk/

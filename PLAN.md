@@ -33,7 +33,7 @@ This document is the plan only. No orchestrator code has been written yet.
 
 | Piece | Where | Status / notes |
 |---|---|---|
-| Study / experiment ledger | Acquirium PR #78 (`experiment-interface`, `9a70a1f`; was `a74b3bc`): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .table() .timeseries(unit=, observed=, keys=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | Not merged yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
+| Study / experiment ledger | Acquirium `main` (`227e3f6`, PR #78 merged; was `6335f52` on its branch): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .table() .timeseries(unit=, observed=, keys=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | No release has it yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
 | Variable declarations | `ExperimentStore.declare` (`Experiments.py:204`) | Within a study, a label's role, kind and metadata (**including unit**) are fixed. Re-declaring it with a different shape raises an error. |
 | Study creation | `ExperimentStore.define` (`Experiments.py:193`) | **Silently idempotent by name**: it returns the existing study instead of failing. The orchestrator has to guard against duplicates itself. |
 | Deletion | — | **There is no way to delete a study, run or observation.** `Manager.delete_timeseries` (`manager.py:809`) deliberately raises an error. The only reset is `recreate=True`, which wipes the whole database. |
@@ -843,6 +843,7 @@ merged column-wise. Every selector resolves to a list of Acquirium stream refere
 | `{"study": "example_b", "dataset": "...", "columns": [...]}` | a dataset in **another study of the same tenant** |
 | `{"result": "<result tag>", "keys": [...]}` | exported model results (D3), e.g. fitting on simulated data |
 | `{"ref_uris": ["urn:…"]}` | specific Acquirium streams in the tenant's general store |
+| `{"streams": [{"source_id": "historian", "ref_name": "FT_101"}]}` | the same, by the names their driver registered them with (Acquirium derives the URI from the pair) |
 | `{"resolve": "digester biogas volume"}` | Acquirium text resolution (`ac.resolve`). The command fails if the match is ambiguous. |
 | `{"sparql": "SELECT ?ref WHERE { … }"}` | a **read-only** SPARQL query that returns stream references (UPDATE is rejected) |
 
@@ -918,7 +919,7 @@ GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas
 ```
 
 **Built** (M4) in `flex_orchestrator.fitting` and `flexpse/regression.py`, with these details settled:
-- **Selectors.** All six kinds. The general-store ones (`ref_uris`, `resolve`, `sparql`) need a backend with the
+- **Selectors.** All seven kinds. The general-store ones (`ref_uris`, `streams`, `resolve`, `sparql`) need a backend with the
   optional `StreamStore` methods (the Acquirium backend has them). `resolve` matches stream labels through SPARQL
   (an equal label first, then labels containing every word) and falls back to Acquirium's `resolve` for a concept's
   streams; a local server started with `exact_only=True` does no fuzzy text search, so label matching is what finds
@@ -939,6 +940,97 @@ GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas
 - **Variants on Ray (built, M5).** With `max_workers > 1` (or a study's `execution`), each prepared dataset is
   `ray.put` once, the fits run as Ray tasks (`fitting.command._compute`, no store), and the main process stores
   them in plan order, so the results equal fitting in-process.
+
+**D21 — Model inputs from stored data (`model_inputs`).** A study (or one build) can set model variables from data
+already stored: a dataset of the study, a stored result, or general-store streams. A `model_inputs` entry uses
+**the same selector syntax as a D19 fit's `X` / `y`** (`dataset`, `result`, `ref_uris`, `streams`, `resolve`,
+`sparql`, with `start`, `end`, `units`, `rename`), so a user who can select fit data can select model inputs. After
+`rename`, **each column's name is the model path it sets** (a Pyomo component path, as in a `variable` sweep).
+
+```yaml
+base_model_spec: base
+model_inputs:                            # D21: applied to every task, before its sweep values
+  - dataset: ro_operation                # this study's dataset; one column per path
+    columns: [demand]
+    rename: {demand: plant.product.flow}
+    units: m^3/hr                        # convert to the model's units (pint)
+  - streams: [{source_id: historian, ref_name: FT_101}]
+    rename: {"*": plant.feed.temperature}
+    timezone: America/Los_Angeles        # the facility's zone; default UTC (see below)
+    resample: {agg: mean}                # onto the model's time step; mean by default
+    gaps: interpolate                    # interpolate (default) | ffill | zero | error
+    limit: 4                             # longest run of missing steps filled; more fails
+  - dataset: ro_operation                # one number, not a series
+    columns: [membrane_age]
+    rename: {membrane_age: plant.ro.age}
+    reduce: last                         # mean | last | first | min | max | median
+  - dataset: ro_operation                # last year's July for this July's horizon
+    columns: [price]
+    rename: {price: costing.energy_prices.electrical}
+    offset: -365D
+fits: [...]                              # D19, unchanged
+sweeps:
+  - type: variable
+    path: plant.ro.recovery
+    values: [0.45, 0.5]
+output_name: "recovery_{plant.ro.recovery}"
+```
+
+- **Where it runs.** The main process resolves every input once per distinct model horizon, before tasks are
+  dispatched, and passes plain values as build overrides (the path `variable` sweeps already use; for flex-pse a
+  `fix` element, or a costing field edit). Workers never read the store (D13). A sweep or case that sets the same
+  path as an input is an error, not a silent override.
+- **The model's time axis** comes from a new model-agnostic hook, `time_grid(spec) -> DatetimeIndex`, so the
+  orchestrator doesn't read flex-pse specs itself. The flex-pse version builds the `time` element's
+  `pd.date_range(start_date, periods=n, freq=time_step)`. A model without one takes only `reduce`d inputs.
+- **Time zone: the model runs on the facility's local time.** We model flexible operation at the site the data
+  comes from, so flex-pse's naive times are that site's wall clock. Stored timestamps are UTC (D6, and streams);
+  `timezone` names the site's zone, and the data is converted to it and made naive before alignment. The default
+  is UTC: data stored in UTC means a model in UTC. Across DST, the repeated autumn hour averages into one step and
+  the missing spring hour is a gap, filled by `gaps`.
+- **Alignment.** Take the window `[start, end)` of the horizon (shifted by `offset`), resample to `time_step` with
+  `resample.agg`, fill gaps, check there is exactly one value per time point, convert `units`, and pass the list.
+  `reduce` instead reduces the window to one number.
+- **Gaps.** `interpolate` (the default) fills linearly in time, up to `limit` steps in a row. `ffill` carries the
+  last value forward, `zero` writes 0, and `error` refuses any gap. A gap `interpolate` can't fill (before the first
+  or after the last sample, or longer than `limit`) fails the input with the steps it couldn't fill.
+- **Provenance.** The resolved values go into the result's `overrides` (D4), so an export rebuilds the model with no
+  database (D17). A new `model_inputs` JSON input records, per entry, the selector as sent, what it resolved to (the
+  dataset `run_id`, the result's run, the stream refs), the window, the alignment and a `data_hash`, as a fit run
+  records its training data (D19).
+- **Sweeping inputs** (`type: model_inputs`). Each value is a `label` and a set of `inputs` (entries as above), and a
+  task takes one set. It combines with other sweeps (`combine: product` / `zip`) and in `cases` (a `model_inputs:`
+  key per case) like any sweep, and `output_name` uses the label (`{feed}` → `line_a`), since selectors are too long
+  for a name. An input from a sweep or case **replaces** the top-level entry for the same path; a `variable` sweep
+  on a path that has an input is still an error. Each distinct set is resolved once, in the main process, and reads
+  are cached per distinct selector, so 50 values means at most 50 reads before anything solves. Values that differ
+  only in `offset` (or `start` / `end`) sweep the same streams over time windows.
+
+  ```yaml
+  sweeps:
+    - type: model_inputs
+      name: feed
+      values:
+        - label: line_a
+          inputs:
+            - {streams: [{source_id: historian, ref_name: FT_101}], rename: {"*": plant.feed.flow}}
+            - {streams: [{source_id: historian, ref_name: TT_101}], rename: {"*": plant.feed.temperature}}
+        - label: line_b
+          inputs:
+            - {streams: [{source_id: historian, ref_name: FT_201}], rename: {"*": plant.feed.flow}}
+            - {streams: [{source_id: historian, ref_name: TT_201}], rename: {"*": plant.feed.temperature}}
+        - label: last_july                 # the same stream, another window
+          inputs:
+            - {streams: [{source_id: historian, ref_name: FT_101}], rename: {"*": plant.feed.flow}, offset: -365D}
+  combine: product
+  output_name: "feed_{feed}_recovery_{plant.ro.recovery}"
+  ```
+- **Outside studies.** `orch.build(tag, model_inputs=[...], **overrides)` resolves the same entries for one build,
+  and `orch.resolve_model_inputs(tag, [...])` returns the values and provenance without building.
+- **Selectors move** from `fitting/selectors.py` to a neutral `selection` module, unchanged, since fits and model
+  inputs share them; `fitting` re-exports them.
+- **Later:** an input baked into a derived spec as `$source` files (`orch.bind_data(spec_tag, model_inputs)`, like
+  `configure`) for data that is part of the model rather than of a run.
 
 **D12 — Python 3.12**, distribution `flex-orchestrator`, import `flex_orchestrator`, src layout, hatchling, pydantic v2.
 
@@ -1151,7 +1243,7 @@ src/flex_orchestrator/
     imports.py           # import_study (checks schema + checksums, re-creates via the store paths)
   fitting/               # D19 fit_surrogate command (core)
     models.py            # Selector, Prep, Validation, Variant, FitParams (JSON), FitRecord, FitSummary
-    selectors.py         # selectors → frames + units + provenance (dataset, study, result, ref_uris, resolve, read-only sparql)
+    selectors.py         # selectors → frames + units + provenance (dataset, study, result, ref_uris, streams, resolve, read-only sparql)
     prep.py              # align, resample, gap policy, max_rows, holdout split, data hash
     regress.py           # regressor resolution (SurrogateType | import string), fit, predict, metrics
     store.py             # fit runs in <s>::fits
@@ -1233,6 +1325,10 @@ Study config:
 
 ```yaml
 base_model_spec: base_model
+model_inputs:                            # D21: model variables set from stored data, same selectors as fits
+  - {dataset: biogas_data, columns: [flow_in_feed], rename: {flow_in_feed: plant.digester.flow_in}}
+  - {streams: [{source_id: historian, ref_name: TT_200}], rename: {"*": plant.feed.temperature},
+     timezone: America/Los_Angeles, gaps: interpolate}
 fits:                                    # D19: optional, runs before sweeps
   - tag: "biogas_{name}"
     regressor: multilinear               # 0.2 types: multilinear, constant_intensity (arima after U8)
@@ -1258,8 +1354,9 @@ sweeps:
   - type: variable                        # a model variable, fixed to each value
     path: plant.digester.temperature
     values: [35, 40]
-  # also: spec_list (a stored spec per task) and cases (named combinations:
-  #   {name, spec, surrogates: {unit: tag}, configuration_options: {...}, variables: {...}})
+  # also: spec_list (a stored spec per task), model_inputs (a labelled set of D21 inputs per task) and
+  #   cases (named combinations: {name, spec, surrogates: {unit: tag}, configuration_options: {...},
+  #   variables: {...}, model_inputs: [...]})
 combine: product                         # product (nested) | zip (in step)
 export: {include: ["costing.*", "plant.digester.*"], strict_units: true}
 output_name: "model_with_surrogate_{surrogate}_price_{price}_{plant.digester.temperature}"
@@ -1487,7 +1584,7 @@ whole folder on each export, and needs a full `import_study` to resume.
   Acquirium. Deletion is real: the directory is renamed aside, then removed; leftovers go on the next open.
 - **Limits:** one process writes a folder at a time; the index is read when the folder is opened and kept in
   memory. No unit vocabulary (`resolve_unit` is `None`, as in the memory backend), no stream store for the
-  `ref_uris` / `resolve` / `sparql` fit selectors, and no `orch.acquirium`.
+  `ref_uris` / `streams` / `resolve` / `sparql` fit selectors, and no `orch.acquirium`.
 - **Selection:** `Orchestrator(FileBackend(path))` and `flex-orch --files DIR`.
 - **Exit:** the contract tests and every backend-parametrized orchestrator test pass on it (the `backend` fixture
   runs memory, files and Acquirium); reopening returns everything recorded; an example runs end to end.
@@ -1501,6 +1598,22 @@ whole folder on each export, and needs a full `import_study` to resume.
     `sweep_nested` with the full model or scalars only. Storing is the serial part of a Ray study (M5), so Ray
     gains more here: `compare_ray.py`'s 24 month-long solves with 10 workers took 89.5 s in-process and 39.2 s on
     Ray (2.3×) on files, against 112 s and 67 s (1.7×) on Acquirium.
+
+#### M5.6 — Model inputs from stored data (≈ 1 wk)
+D21.
+- Move the selectors to `selection` (no behaviour change).
+- The `time_grid` hook and its flex-pse version.
+- `ModelInput` (a `Selector` plus `timezone`, `resample`, `gaps`, `limit`, `reduce`, `offset`) and the resolver,
+  with unit tests on memory and files: zones and DST, resampling, each gap rule, `reduce`, `offset`, units, a
+  length that doesn't match, a path set twice.
+- `model_inputs` in `StudyConfig`, `orch.build` and `orch.resolve_model_inputs`; the `model_inputs` provenance
+  input; the published schemas.
+- The `model_inputs` sweep type and a case's `model_inputs:`: replacing the top-level entry for a path, labels in
+  `output_name`, one read per distinct selector, and the error for a `variable` sweep on an input's path.
+- An example: the RO plant's product demand taken from its stored dataset.
+- **Exit:** a study whose demand comes from a dataset and whose feed temperature comes from a stream runs, on
+  memory, files and Acquirium, and its export rebuilds each task's model with no database. A `model_inputs` sweep
+  over two sets of streams gives one result per set, each recording the streams it used.
 
 #### M6 — Single-tenant deployment and backups (≈ 2 wks)
 - **Image** (`deploy/docker/`): micromamba plus `environment.yml` plus `idaes get-extensions`. Runs as non-root.
@@ -1625,7 +1738,7 @@ Rough total: **Phase 1 ≈ 14–16 weeks; Phase 2 ≈ 4–5 weeks** (one develop
 
 | File | Env name | Purpose |
 |---|---|---|
-| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.2.0** from git (upstream `flex-pse/flex-pse`, commit `b3cc361`), an editable install of the sibling checkout `../acquirium` (the PR #78 branch), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
+| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.2.0** from git (upstream `flex-pse/flex-pse`, commit `b3cc361`), Acquirium from git at the same commit as `environment.yml` (`DataDrivenCPS/acquirium@227e3f6`, on `main`; never a local checkout), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
 | `environment.yml` | `flex-orch` | Deployment. flex-pse and Acquirium are pinned to **exact git SHAs**. Used by the M6 image. |
 
 ```bash

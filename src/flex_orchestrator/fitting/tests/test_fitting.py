@@ -185,10 +185,20 @@ class StreamBackend(MemoryBackend):
         return {"columns": ["ref"], "rows": [["urn:s#2"], ["urn:s#2"], [None]]}
 
     def stream_info(self, refs):
+        unknown = (None, None, None, [])
         return {
-            r: dict(zip(("name", "label", "unit"), self.streams[r][:3], strict=True))
+            r: dict(
+                zip(
+                    ("name", "label", "unit"),
+                    self.streams.get(r, unknown)[:3],
+                    strict=True,
+                )
+            )
             for r in refs
         }
+
+    def stream_ref(self, source_id, ref_name):
+        return f"urn:{source_id}#{ref_name.removeprefix('FT_')}"
 
     def find_streams(self, text):
         return [
@@ -211,6 +221,24 @@ def test_ref_uri_selectors_read_streams(stream_orch):
     assert found.units == {"FT_1": "meter**3/day", "3": None}
     assert found.frame["3"].isna().sum() == 2
     assert found.provenance["refs"] == {"FT_1": "urn:s#1", "3": "urn:s#3"}
+
+
+def test_streams_selectors_name_streams_by_source(stream_orch):
+    found = selectors.load(
+        stream_orch,
+        Selector(
+            streams=[
+                {"source_id": "s", "ref_name": "FT_2"},
+                {"source_id": "s", "ref_name": "FT_1"},
+            ]
+        ),
+    )
+    assert list(found.frame.columns) == ["FT_2", "FT_1"]
+    assert found.provenance["refs"] == {"FT_2": "urn:s#2", "FT_1": "urn:s#1"}
+    with pytest.raises(FitError, match="no stream 'FT_9' from source 's'"):
+        selectors.load(
+            stream_orch, Selector(streams=[{"source_id": "s", "ref_name": "FT_9"}])
+        )
 
 
 def test_resolve_needs_exactly_one_stream(stream_orch):
@@ -442,6 +470,7 @@ def test_a_multilinear_fit_is_stored_with_its_fit_run(orch):
         "result": None,
         "keys": None,
         "ref_uris": None,
+        "streams": None,
         "resolve": None,
         "sparql": None,
         "start": None,

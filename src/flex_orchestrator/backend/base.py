@@ -217,7 +217,8 @@ class StreamStore(Protocol):
     """Optional: a backend that also reads the general store's streams.
 
     Streams outside the experiment ledger (a plant historian's, say) are what
-    the ``ref_uris``, ``resolve`` and ``sparql`` fit selectors read (D19). The
+    the ``ref_uris``, ``streams``, ``resolve`` and ``sparql`` fit selectors read
+    (D19). The
     Acquirium backend has them; the memory backend doesn't. This protocol
     documents the methods; the selectors check for them with ``hasattr``.
     """
@@ -233,6 +234,9 @@ class StreamStore(Protocol):
 
     def find_streams(self, text: str) -> list[dict[str, Any]]:
         """Return ``[{"ref", "label", "point"}]`` for streams matching ``text``."""
+
+    def stream_ref(self, source_id: str, ref_name: str) -> str:
+        """Return the reference URI of ``source_id``'s stream ``ref_name``."""
 
 
 def to_utc(when: Any) -> datetime:

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from flex_orchestrator.errors import FitError
 
-SOURCES = ("dataset", "result", "ref_uris", "resolve", "sparql")
+SOURCES = ("dataset", "result", "ref_uris", "streams", "resolve", "sparql")
 """tuple[str, ...]: The keys that pick a selector's source; each has exactly one."""
 
 
@@ -33,6 +33,18 @@ class Window(_Strict):
     end: datetime | None = None
 
 
+class StreamName(_Strict):
+    """A general-store stream by the names its driver registered it with.
+
+    Attributes:
+        source_id: The datasource, e.g. ``"historian"``.
+        ref_name: The stream's name in that source, e.g. ``"FT_101"``.
+    """
+
+    source_id: str
+    ref_name: str
+
+
 class Selector(_Strict):
     """Where one or more columns of fit data come from.
 
@@ -42,6 +54,8 @@ class Selector(_Strict):
       study, or of another study in the same store;
     - ``result`` (with ``keys``): exported values of a stored result;
     - ``ref_uris``: streams of the general store, by reference URI;
+    - ``streams``: streams of the general store, by ``source_id`` and
+      ``ref_name``;
     - ``resolve``: the one general-store stream whose label matches this text;
     - ``sparql``: a read-only SPARQL ``SELECT`` whose first column is stream
       references.
@@ -63,6 +77,7 @@ class Selector(_Strict):
     result: str | None = None
     keys: list[str] | None = None
     ref_uris: list[str] | None = None
+    streams: list[StreamName] | None = None
     resolve: str | None = None
     sparql: str | None = None
     start: datetime | None = None

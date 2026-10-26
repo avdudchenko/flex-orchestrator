@@ -1,8 +1,9 @@
 # Development environment for flex-orchestrator.
 # flex-pse is the v0.2.0 release from git; to co-develop it, swap that line for
-# `-e ../flex-pse[parameterize,solvers,testing]`. The sibling ../acquirium checkout
-# is installed editable so Acquirium PR #78 changes are picked up without
-# reinstalling. Binary solvers come from conda-forge; run
+# `-e ../flex-pse[parameterize,solvers,testing]`. Acquirium comes from git, pinned to
+# the same commit of main as environment.yml (it has the experiment/study API
+# since PR #78 merged; no release has it yet), never from a local checkout. Binary
+# solvers come from conda-forge; run
 # `idaes get-extensions` after creation for IPOPT.
 # Usage: conda env create -f environment-dev.yml
 name: flex-orch-dev
@@ -31,7 +32,8 @@ dependencies:
   - pip:
       # flex-pse v0.2.0 (flowsheet spec schema 0.1.0). The tag's dist-info still says 0.1.0.
       - "flex-pse[parameterize,solvers,testing] @ git+https://github.com/flex-pse/flex-pse.git@v0.2.0"
-      - -e ../acquirium
+      # Acquirium main (PR #78 merged); keep in step with environment.yml
+      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
       - httpx
       # parallel execution (D13) uses ray, which already comes with acquirium

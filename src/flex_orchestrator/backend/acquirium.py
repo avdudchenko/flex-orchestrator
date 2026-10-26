@@ -110,7 +110,7 @@ class AcquiriumBackend:
                 can't resolve ``unit``.
         """
         builder = getattr(self._study(study), role)(label)
-        metadata = dict(metadata or {})
+        metadata = {k: v for k, v in (metadata or {}).items() if v is not None}
         if kind in ("json", "table", "file"):
             if unit is not None:
                 raise StorageError(f"A {kind} variable ({label!r}) can't have a unit.")
@@ -299,6 +299,14 @@ SELECT ?ref ?name ?label ?unit WHERE {{
                 found["unit"] = qudt_key(unit)
         return info
 
+    def stream_ref(self, source_id: str, ref_name: str) -> str:
+        """Return the reference URI of ``source_id``'s stream ``ref_name``.
+
+        Acquirium derives it from the two names, so this doesn't check that the
+        stream exists; :meth:`stream_info` gives a missing stream no ``name``.
+        """
+        return str(self.acquirium.reference_uri(source_id, ref_name))
+
     def find_streams(self, text: str) -> list[dict[str, Any]]:
         """Find the streams whose point's label matches ``text``.
 
@@ -363,7 +371,7 @@ def _unit_uri(unit: str | None) -> str | None:
 
 def _variable(declared: Any) -> Variable:
     metadata = dict(declared.metadata)
-    unit = metadata.pop("unit", None)
+    unit = declared.unit
     if unit is not None and unit.startswith(QUDT_UNIT):
         unit = unit[len(QUDT_UNIT) :]
     metadata.pop("observed", None)

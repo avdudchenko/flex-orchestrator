@@ -17,6 +17,8 @@ schedule it picks. The script:
     python examples/ro_surrogates/example.py
 """
 
+import os
+import shutil
 from pathlib import Path
 
 import flexops as fo
@@ -30,6 +32,20 @@ from pyomo.network import Arc
 from flex_orchestrator import Orchestrator
 
 HERE = Path(__file__).parent
+
+
+def fresh_store(folder: Path) -> Path:
+    """Return ``folder/tmp_flexorch``, the example's store, deleted first.
+
+    Starting from an empty store means a store left by an older Acquirium never
+    has to be upgraded. Set ``FLEXORCH_KEEP_EXAMPLE_STORE=1`` to keep it.
+    """
+    store = folder / "tmp_flexorch"
+    if store.exists() and os.environ.get("FLEXORCH_KEEP_EXAMPLE_STORE") != "1":
+        shutil.rmtree(store)
+    return store
+
+
 flow = u.m**3 / u.hr
 
 UNITS = {"permeate": "m^3/hr", "power_electrical": "kW"}  # of the operating data
@@ -114,7 +130,7 @@ def compare(orch):
 
 
 if __name__ == "__main__":
-    with Orchestrator(data_dir=HERE / ".flexorch") as orch:
+    with Orchestrator(data_dir=fresh_store(HERE)) as orch:
         if "ro_surrogates" in orch.studies():
             orch.delete_study("ro_surrogates")
         orch.create_study("ro_surrogates")
