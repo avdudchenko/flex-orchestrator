@@ -10,7 +10,12 @@ thing:
 - ``configuration_option``: an option the model is built with, such as a
   unit's construction option or a price;
 - ``spec_list``: the model spec itself;
+- ``model_inputs``: the stored data model variables are set from (D21);
 - ``cases``: named, hand-picked combinations of the above.
+
+``model_inputs`` (outside the sweeps) sets model variables from stored data in
+every task: a dataset, a stored result or general-store streams, selected as a
+fit's ``X`` and ``y`` are.
 
 For example::
 
@@ -44,6 +49,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from flex_orchestrator.errors import StudyConfigError
 from flex_orchestrator.fitting.models import FitParams, _Strict
+from flex_orchestrator.inputs.models import InputSet, ModelInput
 
 
 class SurrogateSweep(_Strict):
@@ -125,6 +131,31 @@ class SpecListSweep(_Strict):
     specs: list[str] = Field(min_length=1)
 
 
+class ModelInputsSweep(_Strict):
+    """Each task sets model variables from one of ``values``' sets of data (D21).
+
+    An entry in a set replaces the config's ``model_inputs`` entry for the same
+    path, so a sweep can vary only the streams it names.
+
+    Attributes:
+        name: The field ``output_name`` renders a set's label as;
+            ``model_inputs`` by default.
+        values: The sets; their labels must differ.
+    """
+
+    type: Literal["model_inputs"]
+    name: str | None = None
+    values: list[InputSet] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _distinct_labels(self) -> "ModelInputsSweep":
+        labels = [value.label for value in self.values]
+        repeated = sorted({n for n in labels if labels.count(n) > 1})
+        if repeated:
+            raise ValueError(f"model_inputs labels must differ; repeated: {repeated}")
+        return self
+
+
 class Case(_Strict):
     """One hand-picked combination in a :class:`CasesSweep`.
 
@@ -136,6 +167,8 @@ class Case(_Strict):
             :class:`ConfigurationSweep` sets them.
         variables: ``{variable path: value}``, as a :class:`VariableSweep`
             fixes them.
+        model_inputs: Entries that set variables from stored data, as a
+            :class:`ModelInputsSweep` value does.
     """
 
     name: str
@@ -143,6 +176,7 @@ class Case(_Strict):
     surrogates: dict[str, str] = Field(default_factory=dict)
     configuration_options: dict[str, Any] = Field(default_factory=dict)
     variables: dict[str, Any] = Field(default_factory=dict)
+    model_inputs: list[ModelInput] = Field(default_factory=list)
 
 
 class CasesSweep(_Strict):
@@ -171,7 +205,12 @@ class CasesSweep(_Strict):
 
 
 Sweep = Annotated[
-    SurrogateSweep | VariableSweep | ConfigurationSweep | SpecListSweep | CasesSweep,
+    SurrogateSweep
+    | VariableSweep
+    | ConfigurationSweep
+    | SpecListSweep
+    | ModelInputsSweep
+    | CasesSweep,
     Field(discriminator="type"),
 ]
 
@@ -189,6 +228,7 @@ class HooksConfig(_Strict):
         swap_surrogate: Swaps a surrogate on a live model.
         time_sets: Names a built model's time Sets for the exporter.
         configure: Sets a configuration sweep's options in the spec.
+        time_grid: Gives a spec's time axis, for ``model_inputs``.
     """
 
     build: str | None = None
@@ -197,6 +237,7 @@ class HooksConfig(_Strict):
     swap_surrogate: str | None = None
     time_sets: str | None = None
     configure: str | None = None
+    time_grid: str | None = None
 
 
 class ExportConfig(_Strict):
@@ -277,10 +318,13 @@ class StudyConfig(_Strict):
         base_model_spec: The model spec every task builds from, unless a
             ``spec_list`` sweep names others.
         fits: ``fit_surrogate`` parameters, run before the sweeps.
+        model_inputs: Model variables every task sets from stored data (D21):
+            fit selectors, each column (after ``rename``) named by the path it
+            sets, lined up with the model's time steps.
         hooks: See :class:`HooksConfig`.
         sweeps: See :class:`SurrogateSweep`, :class:`VariableSweep`,
-            :class:`ConfigurationSweep`, :class:`SpecListSweep` and
-            :class:`CasesSweep`.
+            :class:`ConfigurationSweep`, :class:`SpecListSweep`,
+            :class:`ModelInputsSweep` and :class:`CasesSweep`.
         combine: ``product`` (every combination) or ``zip`` (the sweeps in
             step; they must be the same length).
         solve_options: Passed to the solve hook.
@@ -302,6 +346,7 @@ class StudyConfig(_Strict):
     study: str | None = None
     base_model_spec: str | None = None
     fits: list[FitParams] = Field(default_factory=list)
+    model_inputs: list[ModelInput] = Field(default_factory=list)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     sweeps: list[Sweep] = Field(default_factory=list)
     combine: Literal["product", "zip"] = "product"

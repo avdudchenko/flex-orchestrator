@@ -116,6 +116,11 @@ class LoadedResult(results.ResultReads):
         return dict(self.file.overrides)
 
     @property
+    def model_inputs(self) -> list[dict[str, Any]]:
+        """Where the model inputs among :attr:`overrides` came from (D21)."""
+        return [dict(m) for m in self.file.model_inputs]
+
+    @property
     def outcome(self) -> SolveOutcome | None:
         """How the solve ended."""
         return SolveOutcome.from_stored(self.file.solve_outcome)

@@ -101,6 +101,16 @@ class FitError(FlexOrchestratorError):
     """
 
 
+class ModelInputError(FlexOrchestratorError):
+    """Stored data can't be set on a model variable (PLAN.md D21).
+
+    Raised for a ``model_inputs`` entry whose selector matches nothing, whose
+    data has a gap its ``gaps`` rule can't fill, or that a model without a time
+    axis can't take, and for two entries (or an entry and a ``variable`` sweep)
+    setting one path.
+    """
+
+
 class CommandError(FlexOrchestratorError):
     """A command can't be found, registered or run (PLAN.md D18).
 

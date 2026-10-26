@@ -16,6 +16,7 @@ from flex_orchestrator.flexpse.surrogate import (
     apply_surrogate,
     swap_surrogate,
 )
+from flex_orchestrator.flexpse.timegrid import time_grid
 
 __all__ = [
     "DEFAULT_RELATION",
@@ -26,6 +27,7 @@ __all__ = [
     "predict_surrogate",
     "solve",
     "swap_surrogate",
+    "time_grid",
     "time_sets",
     "validate_model_spec",
     "validate_surrogate_spec",

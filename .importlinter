@@ -30,6 +30,7 @@ source_modules =
     flex_orchestrator.testing
     flex_orchestrator.study.config
     flex_orchestrator.fitting.models
+    flex_orchestrator.inputs.models
     flex_orchestrator.ext.commands
     flex_orchestrator.ext.events
 forbidden_modules =
@@ -65,6 +66,7 @@ source_modules =
     flex_orchestrator.backend.files
     flex_orchestrator.ext
     flex_orchestrator.fitting
+    flex_orchestrator.inputs
     flex_orchestrator.study
     flex_orchestrator.archive
     flex_orchestrator.cli

@@ -80,6 +80,27 @@ def test_the_same_results_with_one_worker_and_four():
     assert meta["build"] == HOOKS["build"]
 
 
+def test_model_inputs_reach_workers_as_values():
+    # Resolved in the main process (D21); a worker gets only the number.
+    runs = {}
+    for workers in (1, 2):
+        orch = memory_orchestrator(study="s")
+        orch.store_model_spec("base", {"value": 1.0})
+        hours = pd.date_range("2025-07-08", periods=3, freq="h", tz="UTC")
+        orch.store_data("ops", pd.DataFrame({"x": [2.0, 3.0, 4.0]}, hours))
+        config = study(values=(1, 2))
+        config["sweeps"] = config["sweeps"][1:]
+        config["output_name"] = "{v}"
+        config["model_inputs"] = [{"dataset": "ops", "reduce": "max"}]
+        assert orch.execute_study(config, max_workers=workers).counts() == {
+            "succeeded": 2
+        }
+        runs[workers] = stored(orch)
+    assert runs[2] == runs[1]
+    assert runs[2]["2"][0] == {"x": 7.0}  # 1 + 2 + the stored max, 4
+    assert runs[2]["2"][3] == {"p.v": 2, "x": 4.0}
+
+
 def test_workers_run_one_thread_per_library(orch):
     run = orch.execute_study(study(values=[1], export={}), max_workers=2)
     assert run.counts() == {"succeeded": 2}

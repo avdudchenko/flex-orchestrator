@@ -1027,8 +1027,19 @@ output_name: "recovery_{plant.ro.recovery}"
   ```
 - **Outside studies.** `orch.build(tag, model_inputs=[...], **overrides)` resolves the same entries for one build,
   and `orch.resolve_model_inputs(tag, [...])` returns the values and provenance without building.
-- **Selectors move** from `fitting/selectors.py` to a neutral `selection` module, unchanged, since fits and model
-  inputs share them; `fitting` re-exports them.
+- **Selectors stay** in `fitting/selectors.py`; model inputs call the same `load`, and turn its `FitError` into
+  `ModelInputError`. (Moving them would only rename the module tests patch.)
+- **Built** (M5.6) in `flex_orchestrator.inputs` (`models.py`: `ModelInput`, `InputSet`; `resolve.py`) and
+  `flexpse/timegrid.py`, with these details settled:
+  - Entries resolve in `study.task.prepare` (main process), against the spec the task builds, so a configuration
+    sweep that changes the horizon is seen. The values go into `Work.overrides`; `TaskSpec` keeps the entries
+    (`model_inputs`, `swept_inputs`), so a dry-run plan shows them.
+  - A study run reads each distinct selection (selector and window) once, cached next to the spec cache.
+  - A value with a unit is passed as `{"value", "units"}`, so flex-pse converts it to the variable's units; Pyomo's
+    `m**3` is written `m^3`, which flex-pse's unit parser needs.
+  - flex-pse's `fix` sets Vars only: a Param (a product's `delivery_min`, say) can't be a model input.
+  - The provenance is the `model_inputs` JSON input of the result run, `ResultHandle.model_inputs`, and
+    `model_inputs` in the D17 result file (imported back with the result).
 - **Later:** an input baked into a derived spec as `$source` files (`orch.bind_data(spec_tag, model_inputs)`, like
   `configure`) for data that is part of the model rather than of a run.
 
@@ -1231,6 +1242,7 @@ src/flex_orchestrator/
     files.py             # FileBackend: the same contract in a folder on disk, no Acquirium (M5.5)
   flexpse/               # optional default hooks (import guarded)
     build.py  solve.py  surrogate.py  regression.py   # regression.py: get_regressor hook over flexparameterize.regression
+    timegrid.py          # time_grid hook: a spec's time points, before it's built (D21)
   study/
     config.py            # StudyConfig schema (sweeps, hooks, output_name template, export selection), load_config
     task.py              # TaskSpec / TaskResult; prepare (main) → execute (anywhere, no store) → finish (main); run_task
@@ -1248,6 +1260,9 @@ src/flex_orchestrator/
     regress.py           # regressor resolution (SurrogateType | import string), fit, predict, metrics
     store.py             # fit runs in <s>::fits
     command.py           # the fit_surrogate command: variants, tag checks, store fit run + spec
+  inputs/                # D21 model inputs
+    models.py            # ModelInput (a Selector plus alignment), InputSet (a model_inputs sweep value)
+    resolve.py           # entries -> build overrides + provenance: zone, offset, resample, gaps, reduce
   ext/                   # D18 (core, no FastAPI)
     commands.py          # @command, Command, CommandRegistry, Progress, the command run ledger
     plugins.py           # Plugin, entry-point discovery, FLEXORCH_PLUGINS allowlist, api_version check, collisions
@@ -1601,7 +1616,7 @@ whole folder on each export, and needs a full `import_study` to resume.
 
 #### M5.6 — Model inputs from stored data (≈ 1 wk)
 D21.
-- Move the selectors to `selection` (no behaviour change).
+- ~~Move the selectors to `selection`~~ (they stay in `fitting`; see D21).
 - The `time_grid` hook and its flex-pse version.
 - `ModelInput` (a `Selector` plus `timezone`, `resample`, `gaps`, `limit`, `reduce`, `offset`) and the resolver,
   with unit tests on memory and files: zones and DST, resampling, each gap rule, `reduce`, `offset`, units, a
@@ -1610,10 +1625,25 @@ D21.
   input; the published schemas.
 - The `model_inputs` sweep type and a case's `model_inputs:`: replacing the top-level entry for a path, labels in
   `output_name`, one read per distinct selector, and the error for a `variable` sweep on an input's path.
-- An example: the RO plant's product demand taken from its stored dataset.
+- An example: ~~the RO plant's product demand taken from its stored dataset~~ (its demand is a Param, which
+  `fix` can't set), so instead the schedule the plant ran: the RO's permeate fixed to the stored operating data.
 - **Exit:** a study whose demand comes from a dataset and whose feed temperature comes from a stream runs, on
   memory, files and Acquirium, and its export rebuilds each task's model with no database. A `model_inputs` sweep
   over two sets of streams gives one result per set, each recording the streams it used.
+- **Status: built.**
+  - `inputs/tests/test_inputs.py` (memory and files): hourly data onto 15-minute steps, a unitless column, the
+    facility's zone, both DST days, resampling to a coarser step, each gap rule, gaps that can't be filled,
+    `reduce` with and without time steps, `offset`, units, a path set twice, swept entries replacing, a selector
+    that matches nothing, one read per selection, and invalid entries.
+  - `inputs/tests/test_inputs_study.py` (memory and files): a study with `model_inputs` and a `model_inputs`
+    sweep, a case, the clash with a `variable` sweep, a failing input, the dry-run plan, export and import,
+    `orch.build` and `orch.resolve_model_inputs`, labels and the schema.
+  - `inputs/tests/test_inputs_flexpse.py` (solved with HiGHS): `time_grid` matches the built model; the demo's
+    pump flow from a dataset over two windows (memory, files and Acquirium); and on Acquirium from two historian
+    streams, by `source_id` / `ref_name`, each result recording its stream ref.
+  - `test_parallel.py`: inputs reach Ray workers as values, with the same results as in-process.
+  - `examples/ro_study/model_inputs.py`: the optimized schedule costs $1,296.47; the one the plant ran (June's
+    stored permeate) $2,580.02.
 
 #### M6 — Single-tenant deployment and backups (≈ 2 wks)
 - **Image** (`deploy/docker/`): micromamba plus `environment.yml` plus `idaes get-extensions`. Runs as non-root.

@@ -298,6 +298,7 @@ def _result(orch: Any, file: ResultFile) -> str:
         streams=file.streams or None,
         spec=spec,
         overrides=file.overrides if spec is not None else None,
+        model_inputs=file.model_inputs if spec is not None else None,
     )
     return stored.run_id
 

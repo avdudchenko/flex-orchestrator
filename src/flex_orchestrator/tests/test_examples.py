@@ -4,7 +4,7 @@ Each runs in its own process. Processes on one data directory share its
 Acquirium, so a holder process starts it once for all of them; starting one
 takes about half a minute.
 
-- The step-by-step RO example, the five study-config ones, and the surrogate
+- The step-by-step RO example, the six study-config ones, and the surrogate
   sweep stored on disk (no Acquirium).
 - The sample plugin (``examples/plugins/ro_tools``), installed with pip into
   a temporary folder: it loads only when ``FLEXORCH_PLUGINS`` lists it, its
@@ -102,6 +102,7 @@ STUDY_TAGS = {
         for w in (160, 180, 200)
     ],
     "sweep_cases": ["linear_tight_feed", "fixed_loose_feed", "aged_membranes"],
+    "model_inputs": ["optimized", "as_operated"],
 }
 
 
