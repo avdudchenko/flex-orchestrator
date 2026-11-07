@@ -8,6 +8,7 @@ import pyomo.environ as pyo
 from flexops import apply_spec, build_model
 
 from flex_orchestrator.errors import SpecError
+from flex_orchestrator.specs import is_design_spec
 
 
 def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
@@ -23,7 +24,8 @@ def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
 
     Args:
         spec: A ``FlowsheetSpec`` as JSON (schema ``0.1.1``; older specs migrate
-            on load).
+            on load), or a ``DesignSpec``, which
+            :func:`~flex_orchestrator.flexpse.design.build_design` builds.
         **overrides: Values to fix, keyed by variable path from the model root
             (see :func:`with_overrides`).
 
@@ -37,6 +39,11 @@ def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
     Example:
         >>> model = build(spec, **{"demo.pump.flow_in": 10.0})  # doctest: +SKIP
     """
+    if is_design_spec(spec):
+        # Imported here: flexpse.design builds on with_overrides.
+        from flex_orchestrator.flexpse.design import build_design
+
+        return build_design(spec, **overrides)
     return build_model(with_overrides(spec, overrides))
 
 
@@ -95,8 +102,20 @@ def apply_values(model: pyo.Block, values: Mapping[str, Any]) -> None:
     Raises:
         flexcore.exceptions.FlexConfigError: If a path names no variable, or a
             value doesn't fit it.
+        SpecError: If ``model`` is a merged design model, which has several time
+            blocks; set values per horizon with the design's ``changes``.
     """
+    refuse_design_model(model, "apply values to")
     apply_spec(model, with_overrides({"elements": []}, values)["elements"])
+
+
+def refuse_design_model(model: pyo.Block, action: str) -> None:
+    """Raise if ``model`` is a merged design model; flex-pse can't edit one whole."""
+    if hasattr(model, "_design_spec"):
+        raise SpecError(
+            f"Can't {action} a merged design model. Vary it with the design's "
+            "changes before building."
+        )
 
 
 def configure(spec: dict, path: str, value: Any) -> dict:
@@ -116,8 +135,12 @@ def configure(spec: dict, path: str, value: Any) -> dict:
     the spec leaves at its default can be set too. The option isn't checked
     here; flex-pse validates the spec when it's stored or built.
 
+    In a design study, ``capacities.<name>.<field>`` sets a field of that
+    capacity (``"capacities.battery_energy.capital_cost"``), and any other path
+    is an option of the ``base`` flowsheet.
+
     Args:
-        spec: A ``FlowsheetSpec`` as JSON. Not modified.
+        spec: A ``FlowsheetSpec`` or ``DesignSpec`` as JSON. Not modified.
         path: The element's name, then the option's dotted path within it.
         value: The new value: a number, a string, a list or a dict.
 
@@ -131,6 +154,8 @@ def configure(spec: dict, path: str, value: Any) -> dict:
     Example:
         >>> configure(spec, "plant.feed.max_withdrawal.value", 200)  # doctest: +SKIP
     """
+    if is_design_spec(spec):
+        return _configure_design(spec, path, value)
     elements = copy.deepcopy(spec["elements"])
     named = {e["name"]: e for e in elements if "name" in e}
     parts = path.split(".")
@@ -154,6 +179,27 @@ def configure(spec: dict, path: str, value: Any) -> dict:
         options = element
     _set_field(options, parts[cut:], value, path)
     return {**spec, "elements": elements}
+
+
+def _configure_design(spec: dict, path: str, value: Any) -> dict:
+    """Set a capacity's field, or an option of the design's base flowsheet."""
+    parts = path.split(".")
+    if parts[0] != "capacities":
+        return {**spec, "base": configure(spec["base"], path, value)}
+    if any(e.get("name") == "capacities" for e in spec["base"]["elements"]):
+        raise SpecError(
+            f"{path!r} is ambiguous: the base flowsheet has an element named "
+            "'capacities'. Rename it to sweep the design's capacities."
+        )
+    capacities = copy.deepcopy(spec["capacities"])
+    named = {c["name"]: c for c in capacities}
+    if len(parts) < 3 or parts[1] not in named:
+        raise SpecError(
+            f"{path!r} doesn't name a capacity's field, as in "
+            f"'capacities.<name>.capital_cost'. Capacities: {sorted(named)}."
+        )
+    _set_field(named[parts[1]], parts[2:], value, path)
+    return {**spec, "capacities": capacities}
 
 
 def _set_field(target: dict, parts: list[str], value: Any, path: str) -> None:

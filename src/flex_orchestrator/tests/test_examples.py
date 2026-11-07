@@ -155,6 +155,15 @@ def test_ro_study_on_disk():
     shutil.rmtree(EXAMPLES / "ro_study" / "on_disk")
 
 
+def test_design_study():
+    pytest.importorskip("flexdesign")
+    out = script(EXAMPLES / "design_study" / "example.py")
+    assert "{'succeeded': 3}" in out
+    assert "solar_600: {'battery_energy'" in out
+    assert "July 2030 battery charge starts 2030-07-01" in out
+    shutil.rmtree(EXAMPLES / "design_study" / "on_disk")
+
+
 POPULATE = """
 import json, sys
 from flex_orchestrator.export import ExportedSeries, ModelData

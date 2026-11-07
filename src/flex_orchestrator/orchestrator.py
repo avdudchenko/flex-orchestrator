@@ -45,6 +45,7 @@ from flex_orchestrator.errors import (
     AmbiguousColumnError,
     HookError,
     ModelInputError,
+    SpecError,
     StorageError,
     StudyExistsError,
     StudyNotFoundError,
@@ -79,6 +80,7 @@ from flex_orchestrator.specs import (
     SpecKind,
     SpecRecord,
     check_tag,
+    is_design_spec,
     normalise_spec,
     run_hash,
     to_json_spec,
@@ -1332,6 +1334,28 @@ class Orchestrator:
                 or a unit that doesn't convert.
         """
         return self.result(tag).data(units)
+
+    def design_results(self, tag: str) -> Any:
+        """Return the sizes and annualized costs of a stored design study.
+
+        Args:
+            tag: The result's tag.
+
+        Returns:
+            A :class:`~flex_orchestrator.study.design.DesignSummary`.
+
+        Raises:
+            TagNotFoundError: If no succeeded result has this tag.
+            SpecError: If the result wasn't built from a design study.
+            ExportError: If its export left out a value the summary needs.
+        """
+        from flex_orchestrator.study.design import read_summary
+
+        handle = self.result(tag)
+        spec = handle.spec().spec if handle.spec_tag else {}
+        if not is_design_spec(spec):
+            raise SpecError(f"Result {tag!r} wasn't built from a design study.")
+        return read_summary(handle.data(), spec)
 
     def result(self, tag: str) -> "ResultHandle":
         """Return a handle on a stored result; nothing is read until asked for.

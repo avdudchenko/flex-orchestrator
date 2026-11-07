@@ -1049,6 +1049,23 @@ output_name: "recovery_{plant.ro.recovery}"
 - **Later:** an input baked into a derived spec as `$source` files (`orch.bind_data(spec_tag, model_inputs)`, like
   `configure`) for data that is part of the model rather than of a run.
 
+**D22 — Design studies (`design`).** flex-pse's `flexdesign` sizes equipment once across every (year, representative
+month), as one merged model with one TimeBlock per horizon. (**built**)
+
+- **Two ways in, one format.** A `design:` section in `StudyConfig`, or a whole `DesignSpec` stored as a model spec. Both
+  store the format `flex-pse.design`, unversioned because a `DesignSpec`'s `schema_version` is that study's own version.
+  Without `design`, tasks, specs and hashes are unchanged. `DesignStudy` mirrors flex-pse's fields, since `study.config`
+  can't import flex-pse; a test fails if they drift, and flex-pse checks the rules before any task runs.
+- **Hooks.** The default hooks dispatch on the spec's shape, so `DEFAULT_HOOKS` doesn't change. Only `flexpse.design`
+  imports `flexdesign`. `capacities.<name>.<field>` sets a capacity; other paths are `base` options. Fixing a capacity's
+  variable is refused, because flex-pse would silently unfix it; fix a size with its `lower` and `upper`.
+- **Results.** The default export is the summary (`capacity*`, `annual*`, each horizon's operating cost), since horizons
+  multiply the model's size. `orch.design_results(tag)` reads it. The walker takes several axes: in `time_sets`, a Set
+  that is its own block's `time_index` starts a new one. `[` is literal in patterns, so `horizon[2030,*].x` matches.
+- **Limits.** `model_inputs` is refused (#5); per-horizon data goes through `changes` with `$source` files. Storage must
+  be cyclic, which rules out units without a cyclic option, such as `Tank`. Forecast files match by position, and only
+  their length is checked.
+
 **D12 — Python 3.12**, distribution `flex-orchestrator`, import `flex_orchestrator`, src layout, hatchling, pydantic v2.
 
 **D20 — Code style: the same as flex-pse, enforced from the first commit.** **black** formats and **ruff** lints,

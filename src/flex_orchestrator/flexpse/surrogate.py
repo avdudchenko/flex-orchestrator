@@ -15,6 +15,8 @@ from flexops import apply_spec
 from pydantic import ValidationError
 
 from flex_orchestrator.errors import SpecError
+from flex_orchestrator.flexpse.build import refuse_design_model
+from flex_orchestrator.specs import is_design_spec
 
 DEFAULT_RELATION = SurrogateElement.model_fields["relation"].default
 """str: The relation a surrogate replaces when none is given
@@ -31,7 +33,8 @@ def apply_surrogate(
     without the live model (PLAN.md D2).
 
     Args:
-        spec: A ``FlowsheetSpec`` as JSON. Not modified.
+        spec: A ``FlowsheetSpec`` as JSON, or a ``DesignSpec``, whose ``base``
+            is edited. Not modified.
         unit: The unit's element name, e.g. ``"demo.digester"``.
         surrogate_spec: A ``SurrogateSpec`` as JSON (``surrogate_type``,
             ``data``, optional ``provenance``).
@@ -50,6 +53,9 @@ def apply_surrogate(
         ...     spec, "demo.digester", arima_spec, relation="biogas_relation"
         ... )
     """
+    if is_design_spec(spec):
+        base = apply_surrogate(spec["base"], unit, surrogate_spec, relation)
+        return {**spec, "base": base}
     element = _surrogate_element(unit, surrogate_spec, relation)
     units = {e["name"] for e in spec["elements"] if e.get("kind") == "unit"}
     if unit.partition("[")[0] not in units:
@@ -83,7 +89,8 @@ def swap_surrogate(
             :data:`DEFAULT_RELATION`.
 
     Raises:
-        SpecError: If ``surrogate_spec`` is invalid.
+        SpecError: If ``surrogate_spec`` is invalid, or ``model`` is a merged
+            design model.
         flexcore.exceptions.FlexConfigError: If the model has no such unit or
             relation.
 
@@ -92,6 +99,7 @@ def swap_surrogate(
         ...     model, "demo.digester", arima_spec, relation="biogas_relation"
         ... )
     """
+    refuse_design_model(model, "swap a surrogate in")
     apply_spec(model, [_surrogate_element(unit, surrogate_spec, relation)])
 
 

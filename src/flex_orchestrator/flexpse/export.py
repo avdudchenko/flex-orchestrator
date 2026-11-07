@@ -22,6 +22,9 @@ def time_sets(model: pyo.Block) -> list[pyo.Set]:
     Args:
         model: A built flex-pse model.
 
+    A merged design model has one TimeBlock per horizon: each horizon's Sets
+    follow in turn, its ``time_index`` first.
+
     Returns:
         The time Sets, main one first, or ``[]`` if the model doesn't have
         exactly one TimeBlock (a user's own model, say). The exporter then finds
@@ -30,6 +33,8 @@ def time_sets(model: pyo.Block) -> list[pyo.Set]:
     Example:
         >>> export_model_data(model, time_sets=time_sets(model))  # doctest: +SKIP
     """
+    if hasattr(model, "_design_spec"):
+        return [s for horizon in model.horizon.values() for s in time_sets(horizon)]
     try:
         time_index = find_time_block(model).time_index
     except FlexConfigError:

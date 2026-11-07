@@ -34,8 +34,11 @@ def solve(
         >>> outcome = solve(model, prefer="highs")  # doctest: +SKIP
     """
     if prefer is None:
-        # build_model keeps the spec it built from on the model.
-        prefer = getattr(getattr(model, "_flex_spec", None), "solver", None)
+        # build_model keeps the spec it built from on the model; a merged design
+        # model keeps its study, whose base names the solver.
+        design = getattr(model, "_design_spec", None)
+        spec = design.base if design else getattr(model, "_flex_spec", None)
+        prefer = getattr(spec, "solver", None)
     start = time.perf_counter()
     solver = get_solver(model=model, prefer=prefer)
     results = solver.solve(model, **options)

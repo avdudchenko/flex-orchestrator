@@ -1,5 +1,45 @@
 {
   "$defs": {
+    "CapacityDecision": {
+      "additionalProperties": false,
+      "description": "One capacity the design study sizes, shared by every horizon.\n\nAttributes:\n    name: The decision's name, e.g. ``\"battery_energy\"``.\n    variable: The scalar variable's path, e.g.\n        ``\"battery.energy_capacity\"``.\n    capital_cost: The overnight cost per unit of the variable.\n    lifetime_years: The asset life used to annualize it.\n    lower: The lower bound, in the variable's units.\n    upper: The upper bound, in the variable's units.",
+      "properties": {
+        "capital_cost": {
+          "title": "Capital Cost",
+          "type": "number"
+        },
+        "lifetime_years": {
+          "title": "Lifetime Years",
+          "type": "number"
+        },
+        "lower": {
+          "default": 0.0,
+          "title": "Lower",
+          "type": "number"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        },
+        "variable": {
+          "title": "Variable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "variable",
+        "capital_cost",
+        "lifetime_years",
+        "upper"
+      ],
+      "title": "CapacityDecision",
+      "type": "object"
+    },
     "Case": {
       "additionalProperties": false,
       "description": "One hand-picked combination in a :class:`CasesSweep`.\n\nAttributes:\n    name: The case's name, which ``output_name`` renders as ``{case}``.\n    spec: A model spec to build from instead of ``base_model_spec``.\n    surrogates: ``{unit: surrogate tag}``.\n    configuration_options: ``{option path: value}``, as a\n        :class:`ConfigurationSweep` sets them.\n    variables: ``{variable path: value}``, as a :class:`VariableSweep`\n        fixes them.\n    model_inputs: Entries that set variables from stored data, as a\n        :class:`ModelInputsSweep` value does.",
@@ -126,6 +166,55 @@
         "values"
       ],
       "title": "ConfigurationSweep",
+      "type": "object"
+    },
+    "DesignStudy": {
+      "additionalProperties": false,
+      "description": "Run each task's model spec as a flex-pse design study.\n\nThis mirrors flex-pse's ``DesignSpec``; flex-pse checks the rules (weights\nsum to 12, years are consecutive) before any task runs.\n\nAttributes:\n    schema_version: The version of this study.\n    years: The modeled years, ascending.\n    months: The representative months.\n    changes: Changes to base elements, applied in order.\n    capacities: What to size.",
+      "properties": {
+        "capacities": {
+          "items": {
+            "$ref": "#/$defs/CapacityDecision"
+          },
+          "minItems": 1,
+          "title": "Capacities",
+          "type": "array"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ParameterChange"
+          },
+          "title": "Changes",
+          "type": "array"
+        },
+        "months": {
+          "items": {
+            "$ref": "#/$defs/RepresentativeMonth"
+          },
+          "minItems": 1,
+          "title": "Months",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "years": {
+          "items": {
+            "$ref": "#/$defs/PlanningYear"
+          },
+          "minItems": 1,
+          "title": "Years",
+          "type": "array"
+        }
+      },
+      "required": [
+        "years",
+        "months",
+        "capacities"
+      ],
+      "title": "DesignStudy",
       "type": "object"
     },
     "Execution": {
@@ -837,6 +926,77 @@
       "title": "ModelInputsSweep",
       "type": "object"
     },
+    "ParameterChange": {
+      "additionalProperties": false,
+      "description": "A change to one base element for some years and months.\n\nAttributes:\n    element: The name of the base element.\n    values: The fields to deep-merge into it. Files named here are stored\n        with the spec.\n    years: The years it applies to; all if omitted.\n    months: The months it applies to; all if omitted.",
+      "properties": {
+        "element": {
+          "title": "Element",
+          "type": "string"
+        },
+        "months": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Months"
+        },
+        "values": {
+          "additionalProperties": true,
+          "title": "Values",
+          "type": "object"
+        },
+        "years": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Years"
+        }
+      },
+      "required": [
+        "element",
+        "values"
+      ],
+      "title": "ParameterChange",
+      "type": "object"
+    },
+    "PlanningYear": {
+      "additionalProperties": false,
+      "description": "One modeled year of a design study.\n\nAttributes:\n    year: The calendar year.\n    represents: The calendar years it stands in for.",
+      "properties": {
+        "represents": {
+          "default": 1,
+          "title": "Represents",
+          "type": "integer"
+        },
+        "year": {
+          "title": "Year",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "year"
+      ],
+      "title": "PlanningYear",
+      "type": "object"
+    },
     "Prep": {
       "additionalProperties": false,
       "description": "How the selected data is prepared before fitting.\n\nAttributes:\n    align: ``inner`` keeps the timestamps every column has; ``outer`` keeps\n        any column's, leaving gaps.\n    resample: Resample to a regular index first.\n    gaps: What to do with missing values: ``error`` (the default),\n        ``drop`` the rows, ``interpolate`` (in time, up to ``limit``\n        missing values in a row), or keep the ``longest_segment`` with\n        none.\n    limit: The longest run of missing values ``interpolate`` fills.\n    max_rows: Refuse more rows than this (a guard against running out of\n        memory).",
@@ -893,6 +1053,38 @@
         }
       },
       "title": "Prep",
+      "type": "object"
+    },
+    "RepresentativeMonth": {
+      "additionalProperties": false,
+      "description": "One calendar month modeled in every planning year.\n\nAttributes:\n    month: The calendar month, 1 to 12.\n    weight: The months of the year it stands in for; weights sum to 12.\n    days: Model only the first N days and scale the bill up to the full\n        month; the whole month if omitted.",
+      "properties": {
+        "days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Days"
+        },
+        "month": {
+          "title": "Month",
+          "type": "integer"
+        },
+        "weight": {
+          "title": "Weight",
+          "type": "number"
+        }
+      },
+      "required": [
+        "month",
+        "weight"
+      ],
+      "title": "RepresentativeMonth",
       "type": "object"
     },
     "Resample": {
@@ -1454,7 +1646,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "A study as data; see :mod:`flex_orchestrator.study.config`.\n\nAttributes:\n    study: The study to run in, created if needed; the selected one if\n        omitted.\n    base_model_spec: The model spec every task builds from, unless a\n        ``spec_list`` sweep names others.\n    fits: ``fit_surrogate`` parameters, run before the sweeps.\n    model_inputs: Model variables every task sets from stored data (D21):\n        fit selectors, each column (after ``rename``) named by the path it\n        sets, lined up with the model's time steps.\n    hooks: See :class:`HooksConfig`.\n    sweeps: See :class:`SurrogateSweep`, :class:`VariableSweep`,\n        :class:`ConfigurationSweep`, :class:`SpecListSweep`,\n        :class:`ModelInputsSweep` and :class:`CasesSweep`.\n    combine: ``product`` (every combination) or ``zip`` (the sweeps in\n        step; they must be the same length).\n    solve_options: Passed to the solve hook. For flex-pse: ``prefer``,\n        ``tee``, ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.\n    export: See :class:`ExportConfig`.\n    output_name: Each task's tag, e.g.\n        ``\"ro_{surrogate}_{plant.ro.recovery}\"``: fields are the sweeps'\n        names, plus ``base`` and ``index``. By default the base tag and\n        each sweep's value, joined by ``_``. A value is written exactly\n        (``str``; ``0.1 + 0.2`` gives ``0.30000000000000004``) unless the\n        field has a format spec, as in Python: ``{recovery:.3g}``,\n        ``{price:.2f}``. The tag is only a name: the values themselves are\n        stored in full with the result. Values that format alike make\n        tags that repeat, which is refused before anything runs.\n    on_existing: When a task's tag is stored: ``error`` (checked before\n        anything runs), ``skip`` it (resume), or ``replace`` it.\n    execution: See :class:`Execution`.",
+  "description": "A study as data; see :mod:`flex_orchestrator.study.config`.\n\nAttributes:\n    study: The study to run in, created if needed; the selected one if\n        omitted.\n    base_model_spec: The model spec every task builds from, unless a\n        ``spec_list`` sweep names others.\n    design: Run every task as a design study (:class:`DesignStudy`). Can't\n        be combined with ``model_inputs``.\n    fits: ``fit_surrogate`` parameters, run before the sweeps.\n    model_inputs: Model variables every task sets from stored data (D21):\n        fit selectors, each column (after ``rename``) named by the path it\n        sets, lined up with the model's time steps.\n    hooks: See :class:`HooksConfig`.\n    sweeps: See :class:`SurrogateSweep`, :class:`VariableSweep`,\n        :class:`ConfigurationSweep`, :class:`SpecListSweep`,\n        :class:`ModelInputsSweep` and :class:`CasesSweep`.\n    combine: ``product`` (every combination) or ``zip`` (the sweeps in\n        step; they must be the same length).\n    solve_options: Passed to the solve hook. For flex-pse: ``prefer``,\n        ``tee``, ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.\n    export: See :class:`ExportConfig`.\n    output_name: Each task's tag, e.g.\n        ``\"ro_{surrogate}_{plant.ro.recovery}\"``: fields are the sweeps'\n        names, plus ``base`` and ``index``. By default the base tag and\n        each sweep's value, joined by ``_``. A value is written exactly\n        (``str``; ``0.1 + 0.2`` gives ``0.30000000000000004``) unless the\n        field has a format spec, as in Python: ``{recovery:.3g}``,\n        ``{price:.2f}``. The tag is only a name: the values themselves are\n        stored in full with the result. Values that format alike make\n        tags that repeat, which is refused before anything runs.\n    on_existing: When a task's tag is stored: ``error`` (checked before\n        anything runs), ``skip`` it (resume), or ``replace`` it.\n    execution: See :class:`Execution`.",
   "properties": {
     "base_model_spec": {
       "anyOf": [
@@ -1476,6 +1668,17 @@
       ],
       "title": "Combine",
       "type": "string"
+    },
+    "design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DesignStudy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "execution": {
       "$ref": "#/$defs/Execution"

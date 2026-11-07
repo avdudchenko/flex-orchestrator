@@ -1,0 +1,40 @@
+# Size a battery and solar for one plant over ten years, at three solar prices.
+base_model_spec: plant
+design:
+  years:
+    - {year: 2030, represents: 5}
+    - {year: 2035, represents: 5}
+  months: # one day of each stands in for its month; use whole months for final sizes
+    - {month: 1, weight: 6, days: 1}
+    - {month: 7, weight: 6, days: 1}
+  changes:
+    # Demand doubles in the second period.
+    - {element: load, years: [2035], values: {value: 60.0}}
+    # A file named here is stored with the spec.
+    - element: pv
+      months: [7]
+      values: {construction_options: {capacity_factor: {$source: sun_july.json}}}
+  capacities:
+    - name: battery_energy
+      variable: battery.energy_capacity
+      capital_cost: 300
+      lifetime_years: 15
+      upper: 1500
+    - name: solar
+      variable: pv.capacity
+      capital_cost: 1200
+      lifetime_years: 25
+      upper: 1500
+sweeps:
+  - type: configuration_option
+    name: solar_cost
+    path: capacities.solar.capital_cost
+    values: [100, 600, 2400]
+output_name: "solar_{solar_cost}"
+export:
+  # The summary, plus July's battery schedule in the first period.
+  include:
+    - "capacity*"
+    - "annual*"
+    - "horizon*.costing.aggregate_operating_cost"
+    - "horizon[2030,7].battery.charge"

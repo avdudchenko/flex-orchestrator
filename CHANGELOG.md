@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+- Design studies, built on flex-pse's `flexdesign`: size equipment once across
+  every modeled year and representative month. Add a `design:` section to a study
+  config, or store a whole `DesignSpec` as a model spec (format `flex-pse.design`,
+  with the files in its `base` and `changes` stored too). Sweeps, Ray, retries and
+  resume work as usual, and a study without `design` is unchanged.
+  - A design study stores a summary by default, read with
+    `orch.design_results(tag)`; export patterns add per-horizon series.
+  - The exporter takes the time Sets of several blocks, each with its own
+    timestamps.
+  - `model_inputs` can't be combined with a design yet (#5).
+
 ### Changed
 - flex-pse is pinned to v0.3.0. Flowsheet specs are now schema `0.1.1`; `0.1.0`
   specs still load, and BatteryModel's `capacity` migrates to `energy_capacity`.
@@ -18,6 +30,9 @@
     tag's package metadata says so.
 
 ### Fixed
+- `[` in an export or result pattern is literal, as in a Pyomo path, so
+  `horizon[2030,*].pump.*` matches. Patterns can no longer use `[...]` character
+  classes.
 - The flex-pse spec validators dump with `by_alias=True`, so a `$source`
   reference is stored as `{"$source": ...}`, not `{"source": ...}`.
 - A study run in-process (`max_workers: 1`) whose config names registered

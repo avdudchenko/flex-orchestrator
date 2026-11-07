@@ -36,6 +36,7 @@ source_modules =
 forbidden_modules =
     pyomo
     flexcore
+    flexdesign
     flexops
     flexparameterize
     acquirium
@@ -47,6 +48,7 @@ source_modules =
     flex_orchestrator.export
 forbidden_modules =
     flexcore
+    flexdesign
     flexops
     flexparameterize
     acquirium
@@ -75,5 +77,6 @@ forbidden_modules =
     acquirium
     requests
     flexcore
+    flexdesign
     flexops
     flexparameterize

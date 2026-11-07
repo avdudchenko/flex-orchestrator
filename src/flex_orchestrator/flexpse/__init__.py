@@ -13,6 +13,7 @@ from flex_orchestrator.flexpse.build import (
     configure,
     with_overrides,
 )
+from flex_orchestrator.flexpse.design import build_design, validate_design_spec
 from flex_orchestrator.flexpse.export import time_sets
 from flex_orchestrator.flexpse.regression import get_regressor, predict_surrogate
 from flex_orchestrator.flexpse.solve import solve
@@ -29,6 +30,7 @@ __all__ = [
     "apply_surrogate",
     "apply_values",
     "build",
+    "build_design",
     "configure",
     "get_regressor",
     "predict_surrogate",
@@ -36,6 +38,7 @@ __all__ = [
     "swap_surrogate",
     "time_grid",
     "time_sets",
+    "validate_design_spec",
     "validate_model_spec",
     "validate_surrogate_spec",
     "with_overrides",

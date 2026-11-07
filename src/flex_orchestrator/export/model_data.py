@@ -1,9 +1,20 @@
 """Containers for exported model values (PLAN.md D3)."""
 
+import fnmatch
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, Literal
+
+
+def path_matches(path: str, pattern: str) -> bool:
+    """Whether ``path`` matches a glob, with ``[`` literal, as in Pyomo paths.
+
+    Example:
+        >>> path_matches("horizon[2030,1].pump.flow", "horizon[2030,*].pump.*")
+        True
+    """
+    return fnmatch.fnmatchcase(path, pattern.replace("[", "[[]"))
 
 
 @dataclass(frozen=True)
