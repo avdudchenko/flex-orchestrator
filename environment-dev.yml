@@ -32,6 +32,8 @@ dependencies:
   - pip:
       # flex-pse v0.3.0 (flowsheet spec schema 0.1.1). The tag's dist-info still says 0.1.0.
       - "flex-pse[parameterize,solvers,testing] @ git+https://github.com/flex-pse/flex-pse.git@v0.3.0"
+      # Ray 2.60.0 crashes in ray.shutdown() on Windows; drop this once a newer one doesn't.
+      - "ray<2.60"
       # Acquirium main (PR #78 merged); keep in step with environment.yml
       - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
