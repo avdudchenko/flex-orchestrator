@@ -264,3 +264,31 @@ def test_a_failing_job_cancels_the_others():
     with pytest.raises(Exception, match="job 1 failed"):
         map_ordered(boom, [(600,), (1,)], workers=2)
     assert time.monotonic() - started < 60
+
+
+@pytest.mark.needs_highs
+def test_design_study_runs_on_ray():
+    pytest.importorskip("flexdesign")
+    from flex_orchestrator.hooks import DEFAULT_HOOKS
+    from flex_orchestrator.study.tests.test_study_design import design, flowsheet
+
+    orch = memory_orchestrator(hooks=DEFAULT_HOOKS)
+    orch.store_model_spec("plant", flowsheet())
+    run = orch.execute_study(
+        {
+            "base_model_spec": "plant",
+            "design": design(),
+            "sweeps": [
+                {
+                    "type": "configuration_option",
+                    "name": "cost",
+                    "path": "capacities.solar.capital_cost",
+                    "values": [600.0, 2400.0],
+                }
+            ],
+            "output_name": "ray_{cost:.0f}",
+            "execution": {"max_workers": 2},
+        }
+    )
+    assert run.counts() == {"succeeded": 2}, run.results
+    assert orch.design_results("ray_600").annualized_cost > 0

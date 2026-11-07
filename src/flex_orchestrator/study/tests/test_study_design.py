@@ -402,28 +402,6 @@ def test_rerun_of_a_failed_task_reuses_its_stored_spec(
 
 @pytest.mark.component
 @pytest.mark.needs_highs
-def test_design_study_runs_on_ray(memory_orch):
-    pytest.importorskip("ray")
-    run = memory_orch.execute_study(
-        study_config(
-            sweeps=[
-                {
-                    "type": "configuration_option",
-                    "name": "cost",
-                    "path": "capacities.solar.capital_cost",
-                    "values": [600.0, 2400.0],
-                }
-            ],
-            output_name="ray_{cost:.0f}",
-            execution={"max_workers": 2},
-        )
-    )
-    assert run.counts() == {"succeeded": 2}, run.results
-    assert memory_orch.design_results("ray_600").annualized_cost > 0
-
-
-@pytest.mark.component
-@pytest.mark.needs_highs
 def test_archive_round_trip_keeps_a_design_study(memory_orch, tmp_path):
     assert memory_orch.execute_study(study_config(output_name="kept")).counts() == {
         "succeeded": 1
