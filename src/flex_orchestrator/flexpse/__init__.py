@@ -1,9 +1,10 @@
-"""The default hooks, built on flex-pse 0.2 (PLAN.md D1).
+"""The default hooks, built on flex-pse 0.3 (PLAN.md D1).
 
 This is the only package that imports flex-pse. Nothing else imports it
 directly: :data:`~flex_orchestrator.hooks.DEFAULT_HOOKS` refers to these
 functions by import string, so the rest of the library works without flex-pse
-installed. Specs are flex-pse flowsheet specs (schema ``0.1.0``).
+installed. Specs are flex-pse flowsheet specs (schema ``0.1.1``; older specs migrate on
+load).
 """
 
 from flex_orchestrator.flexpse.build import (

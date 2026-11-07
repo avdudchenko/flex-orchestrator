@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed
+- flex-pse is pinned to v0.3.0. Flowsheet specs are now schema `0.1.1`; `0.1.0`
+  specs still load, and BatteryModel's `capacity` migrates to `energy_capacity`.
+  - Validating normalises a `0.1.0` spec to different JSON, so storing it again
+    under an existing tag, or resuming a study from before this bump, can raise
+    `TagExistsError` or re-run the task. Use `on_existing: replace` or a new tag.
+  - `solve_options` for the flex-pse hook are now `prefer`, `tee`, `warmstart`,
+    `mip_gap`, `time_limit` and `options`. Others, such as `load_solutions`,
+    give an `error` outcome.
+  - An infeasible HiGHS solve is now stored as `failed` rather than `error`, so
+    `retries` no longer applies to it.
+  - A model with inline `energy_prices` now solves with HiGHS instead of IPOPT.
+  - Run metadata still records `flexpse_version` as `0.1.0`, because the v0.3.0
+    tag's package metadata says so.
+
 ### Fixed
 - The flex-pse spec validators dump with `by_alias=True`, so a `$source`
   reference is stored as `{"$source": ...}`, not `{"source": ...}`.

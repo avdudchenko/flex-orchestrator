@@ -20,7 +20,7 @@ from flex_orchestrator.specs import (
 
 pytestmark = pytest.mark.unit
 
-FLOWSHEET = {"schema_version": "0.1.0", "name": "demo", "elements": []}
+FLOWSHEET = {"schema_version": "0.1.1", "name": "demo", "elements": []}
 SURROGATE = {"surrogate_type": "multilinear", "data": {}}
 
 
@@ -111,7 +111,7 @@ def test_run_hash_depends_on_spec_and_overrides():
 @pytest.mark.parametrize(
     ("spec", "expected"),
     [
-        (FLOWSHEET, "flex-pse.flowsheet/0.1.0"),
+        (FLOWSHEET, "flex-pse.flowsheet/0.1.1"),
         (SURROGATE, "flex-pse.surrogate"),
         ({"anything": 1}, "json"),
     ],

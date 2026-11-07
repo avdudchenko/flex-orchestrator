@@ -19,7 +19,8 @@ def solve(
         prefer: A solver name to try first (see
             :func:`flexcore.solvers.get_solver`). ``None`` uses the spec's
             ``solver`` field when the model was built from one.
-        **options: Passed to the Pyomo solver's ``solve`` (e.g. ``tee=True``).
+        **options: Passed to :meth:`flexcore.solvers.SolverFacade.solve`: ``tee``,
+            ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.
 
     Returns:
         ``"ok"`` when the termination is optimal, ``"failed"`` otherwise.

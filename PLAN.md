@@ -41,7 +41,7 @@ This document is the plan only. No orchestrator code has been written yet.
 | Querying | `ac.query()` / `ac.explore()` builder, `ac.attr.*` expressions, `find_entity`, `find_all_data`, `sparql`, `Q.data()/.dataframe()`, `study.experiments.where(...).frame()` | Returns **polars**. |
 | Units | QUDT ontology bundled; `client.resolve_unit("gal/min")` (`client.py:801`), `/resolve_conversion`, `/conversion_factors` | Turns free-form unit strings into QUDT units. |
 | FlexPSE ↔ Acquirium example | `acquirium/examples/flexpse/record_experiment.py` | Reference pattern (it reads values by hand with `pyo.value` and `pyo.units.convert`). |
-| Model spec | flex-pse 0.2 flowsheet spec: `FlowsheetSpec` (schema `0.1.0`), a flat list of `elements` whose `name` is the component's model path; `flexcore.config.io.load_spec` | The default spec format. Older `ModelConfig` documents (schema `0.0.x`) are not used. |
+| Model spec | flex-pse 0.3 flowsheet spec: `FlowsheetSpec` (schema `0.1.1`; `0.1.0` migrates on load), a flat list of `elements` whose `name` is the component's model path; `flexcore.config.io.load_spec` | The default spec format. Older `ModelConfig` documents (schema `0.0.x`) are not used. |
 | Build / solve | `flexops.build_model(spec)` (expands arcs itself); `flexcore.solvers.get_solver(model=m, prefer=spec.solver).solve(m)`; `flexops.apply_spec(m, elements)` applies `fix` / `unfix` / `dispatch` / `surrogate` elements to a live model | These are the **defaults only**. Users can supply their own (D1). |
 | Surrogate spec | `SurrogateSpec`, and the `surrogate` element (`unit`, `relation`, `surrogate_type`, `data`) | In 0.2 **two types work end to end**: `multilinear` (`MultilinearSurrogate` replaces the relation) and `constant_intensity` (no class; the build fixes the unit's intensity parameter). `quadratic`, `exponential`, `arima` and `neural_network` are reserved stubs that raise `NotImplementedError`. |
 | Regressors | `flexparameterize.regression`: `LinearRegressor().fit(X, y, input_units=, output_units=)` gives `multilinear`; `ConstantIntensityRegressor().fit(X, y).to_surrogate_spec(input_units=, output_units=)` gives `constant_intensity`; `get_regressor(SurrogateType)`; `to_fit_result() -> FitResult` (coefficients, r2/rmse, n_samples, data window) | Exist in 0.2. Neither has `predict`. The ARIMA regressor is only on the `arima_integration` branch (upstream item U8). |
@@ -125,7 +125,7 @@ class SolveFn(Protocol):
   `construction_options` entry, or another element's own field (`"costing.energy_prices.electrical"`). A dict
   option is set whole by a dict value, or one key at a time by a longer path (`"plant.feed.max_withdrawal.value"`);
   missing dicts on the way are created.
-- The defaults live in `flex_orchestrator.flexpse` and target flex-pse 0.2 (**built**):
+- The defaults live in `flex_orchestrator.flexpse` and target flex-pse 0.3 (**built**):
   - `build` adds each override as a flex-pse `fix` element (`"override:<path>"`), then calls `flexops.build_model`.
     An override path is a variable path from the model root (`"demo.pump.flow_in"`, `"...flow_in[3]"`, `"...[*]"`),
     and its value is a number or `{"value", "units"}`. Price sweeps edit the `costing` element instead: a path whose
@@ -142,7 +142,7 @@ class SolveFn(Protocol):
 - A user who writes their own `ExportFn` can store models that aren't Pyomo at all.
 
 **D2 — Specs are stored as data.**
-- A model spec is any JSON-serialisable dict. For flex-pse it is a flowsheet spec (`FlowsheetSpec`, schema `0.1.0`)
+- A model spec is any JSON-serialisable dict. For flex-pse it is a flowsheet spec (`FlowsheetSpec`, schema `0.1.1`)
   as JSON, validated when flex-pse is installed.
 - A surrogate spec is any JSON dict. For flex-pse it is a `SurrogateSpec` dump.
 - Both are stored as `.json()` input observations. A surrogate swap is a spec transformation
@@ -1749,11 +1749,10 @@ D21.
   whose password contains `@`, that prints the rest of the password. Log the parsed host instead. D11 works around
   it by passing the password as `PGPASSWORD`.
 - **U15 (flex-pse, found by the RO example):**
-  - `flexcore.solvers.classify` reports a model with inline `energy_prices` as NLP: the price's `kWh**-1` units
-    make Pyomo's `polynomial_degree()` return `None` for `costing.opex.eq_electricity_cost`. So `solve(prefer=
-    "highs")` falls back to ipopt even for an LP (DEMO_SPEC included). Tariff-file pricing classifies as LP.
-  - The new-style HiGHS interface raises `NoFeasibleSolutionError` on an infeasible model instead of returning a
-    termination, so `run_solve` records `error` rather than `failed`.
+  - ~~`flexcore.solvers.classify` reports a model with inline `energy_prices` as NLP~~ — fixed in flex-pse 0.3:
+    such a model now classifies as an LP and goes to HiGHS.
+  - ~~The new-style HiGHS interface raises `NoFeasibleSolutionError` on an infeasible model~~ — fixed in flex-pse
+    0.3: it returns an infeasible termination, so `run_solve` records `failed`.
   - `Tank`'s holdup equation starts at `t = 1`, so the `t = 0` flows don't touch the volume, and there is no
     terminal-volume option; the example adds both constraints in a spec extension.
   - Multilinear surrogate inputs must be time-indexed, so a scalar `recovery` can't be one; `quadratic` and
@@ -1781,7 +1780,7 @@ Rough total: **Phase 1 ≈ 14–16 weeks; Phase 2 ≈ 4–5 weeks** (one develop
 
 | File | Env name | Purpose |
 |---|---|---|
-| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.2.0** from git (upstream `flex-pse/flex-pse`, commit `b3cc361`), Acquirium from git at the same commit as `environment.yml` (`DataDrivenCPS/acquirium@227e3f6`, on `main`; never a local checkout), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
+| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.3.0** from git (upstream `flex-pse/flex-pse`, commit `809b25b`), Acquirium from git at the same commit as `environment.yml` (`DataDrivenCPS/acquirium@227e3f6`, on `main`; never a local checkout), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
 | `environment.yml` | `flex-orch` | Deployment. flex-pse and Acquirium are pinned to **exact git SHAs**. Used by the M6 image. |
 
 ```bash

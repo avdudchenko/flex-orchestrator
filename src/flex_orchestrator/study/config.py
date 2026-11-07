@@ -327,7 +327,8 @@ class StudyConfig(_Strict):
             :class:`ModelInputsSweep` and :class:`CasesSweep`.
         combine: ``product`` (every combination) or ``zip`` (the sweeps in
             step; they must be the same length).
-        solve_options: Passed to the solve hook.
+        solve_options: Passed to the solve hook. For flex-pse: ``prefer``,
+            ``tee``, ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.
         export: See :class:`ExportConfig`.
         output_name: Each task's tag, e.g.
             ``"ro_{surrogate}_{plant.ro.recovery}"``: fields are the sweeps'

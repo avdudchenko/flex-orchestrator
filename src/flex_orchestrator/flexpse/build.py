@@ -22,7 +22,8 @@ def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
     the worker's.
 
     Args:
-        spec: A ``FlowsheetSpec`` as JSON (schema ``0.1.0``).
+        spec: A ``FlowsheetSpec`` as JSON (schema ``0.1.1``; older specs migrate
+            on load).
         **overrides: Values to fix, keyed by variable path from the model root
             (see :func:`with_overrides`).
 

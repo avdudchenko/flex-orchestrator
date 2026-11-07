@@ -213,6 +213,7 @@ def normalise_spec(
             kind, or validation fails.
     """
     data = to_json_spec(spec)
+    detected = spec_format is None
     spec_format = spec_format or detect_format(data)
     expected = _FAMILY_KIND.get(spec_format.partition("/")[0])
     if expected is not None and expected != kind:
@@ -222,6 +223,9 @@ def normalise_spec(
         )
     if validate:
         data = validate_spec(data, spec_format) or data
+        if detected:
+            # Validating can migrate the spec to a newer schema.
+            spec_format = detect_format(data)
     return data, spec_format
 
 
@@ -255,7 +259,7 @@ def validate_spec(spec: dict[str, Any], spec_format: str) -> dict[str, Any] | No
 
     Args:
         spec: A JSON spec.
-        spec_format: Its format, e.g. ``"flex-pse.flowsheet/0.1.0"``. The part
+        spec_format: Its format, e.g. ``"flex-pse.flowsheet/0.1.1"``. The part
             before ``/`` picks the validator.
 
     Returns:

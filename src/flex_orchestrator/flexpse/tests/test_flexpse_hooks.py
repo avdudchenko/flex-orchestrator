@@ -25,7 +25,10 @@ from flex_orchestrator.flexpse import (  # noqa: E402
     with_overrides,
 )
 from flex_orchestrator.hooks import DEFAULT_HOOKS, HookRegistry, run_solve  # noqa: E402
-from flex_orchestrator.specs import SpecRecord  # noqa: E402
+from flex_orchestrator.specs import (
+    SpecRecord,  # noqa: E402
+    normalise_spec,  # noqa: E402
+)
 from flex_orchestrator.testing import DEMO_SPEC, LINEAR_POWER  # noqa: E402
 
 FLOW_10 = {"demo.pump.flow_in": 10.0}
@@ -175,16 +178,16 @@ def test_swap_surrogate_invalid_spec():
         swap_surrogate(model, "demo.pump", {"data": {}})
 
 
-# Solving. get_solver classifies the demo as NLP, so it routes to IPOPT.
+# Solving. get_solver classifies the demo as an LP, so it routes to HiGHS.
 
 
 @pytest.mark.component
-@pytest.mark.needs_ipopt
+@pytest.mark.needs_highs
 def test_solve_demo_is_optimal():
-    outcome = run_solve(solve, build(DEMO_SPEC), prefer="ipopt")
+    outcome = run_solve(solve, build(DEMO_SPEC), prefer="highs")
     assert outcome.ok, outcome
     assert outcome.termination == "optimal"
-    assert outcome.solver == "ipopt"
+    assert outcome.solver == "highs"
     assert outcome.wall_time > 0
 
 
@@ -213,16 +216,42 @@ def test_surrogate_changes_the_solution():
 
 
 @pytest.mark.component
-@pytest.mark.needs_ipopt
+@pytest.mark.needs_highs
 def test_infeasible_model_is_failed_not_error():
     model = build(DEMO_SPEC)
     model.x = pyo.Var()
     model.y = pyo.Var()
     model.lower = pyo.Constraint(expr=model.x + model.y >= 2)
     model.upper = pyo.Constraint(expr=model.x + model.y <= 1)
-    outcome = run_solve(solve, model, load_solutions=False)
+    outcome = run_solve(solve, model)
     assert outcome.status == "failed", outcome
     assert outcome.termination != "optimal"
+
+
+def _schema_0_1_0_spec():
+    spec = copy.deepcopy(DEMO_SPEC)
+    spec["schema_version"] = "0.1.0"
+    battery = next(e for e in spec["elements"] if e.get("name") == "demo.battery")
+    options = battery["construction_options"]
+    options["capacity"] = options.pop("energy_capacity")
+    return spec
+
+
+@pytest.mark.unit
+@pytest.mark.filterwarnings("ignore::flexcore.exceptions.FlexMigrationWarning")
+def test_older_schema_is_stored_migrated_and_labelled_so():
+    spec, spec_format = normalise_spec("model_spec", _schema_0_1_0_spec())
+    assert spec_format == "flex-pse.flowsheet/0.1.1"
+    assert spec["schema_version"] == "0.1.1"
+    battery = next(e for e in spec["elements"] if e.get("name") == "demo.battery")
+    assert "energy_capacity" in battery["construction_options"]
+
+
+@pytest.mark.unit
+@pytest.mark.filterwarnings("ignore::flexcore.exceptions.FlexMigrationWarning")
+def test_a_spec_stored_before_the_migration_still_builds():
+    model = build(_schema_0_1_0_spec(), **{"demo.battery.capacity": 8.0})
+    assert pyo.value(model.demo.battery.energy_capacity) == pytest.approx(8.0)
 
 
 # Surrogate cases: one per surrogate type the pinned flex-pse implements end to
@@ -314,7 +343,7 @@ def test_reserved_types_still_unimplemented(surrogate_type):
 @pytest.mark.unit
 def test_model_spec_record_validates_with_flexpse():
     record = SpecRecord.create("model_spec", "base", DEMO_SPEC)
-    assert record.spec_format == "flex-pse.flowsheet/0.1.0"
+    assert record.spec_format == "flex-pse.flowsheet/0.1.1"
     bad = {
         **DEMO_SPEC,
         "elements": [e for e in DEMO_SPEC["elements"] if e["kind"] != "time"],
