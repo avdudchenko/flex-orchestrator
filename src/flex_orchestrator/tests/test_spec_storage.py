@@ -53,7 +53,7 @@ FAKE = "flex_orchestrator.testing:fake_solve"
 
 def test_store_and_read_a_model_spec(orch):
     record = orch.store_model_spec("base", DEMO_SPEC)
-    assert record.spec_format == "flex-pse.flowsheet/0.1.0"
+    assert record.spec_format == "flex-pse.flowsheet/0.1.1"
     assert record.assets == {}
     back = orch.model_spec("base")
     assert back == record

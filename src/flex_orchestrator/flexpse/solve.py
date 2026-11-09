@@ -19,7 +19,8 @@ def solve(
         prefer: A solver name to try first (see
             :func:`flexcore.solvers.get_solver`). ``None`` uses the spec's
             ``solver`` field when the model was built from one.
-        **options: Passed to the Pyomo solver's ``solve`` (e.g. ``tee=True``).
+        **options: Passed to :meth:`flexcore.solvers.SolverFacade.solve`: ``tee``,
+            ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.
 
     Returns:
         ``"ok"`` when the termination is optimal, ``"failed"`` otherwise.
@@ -33,8 +34,11 @@ def solve(
         >>> outcome = solve(model, prefer="highs")  # doctest: +SKIP
     """
     if prefer is None:
-        # build_model keeps the spec it built from on the model.
-        prefer = getattr(getattr(model, "_flex_spec", None), "solver", None)
+        # build_model keeps the spec it built from on the model; a merged design
+        # model keeps its study, whose base names the solver.
+        design = getattr(model, "_design_spec", None)
+        spec = design.base if design else getattr(model, "_flex_spec", None)
+        prefer = getattr(spec, "solver", None)
     start = time.perf_counter()
     solver = get_solver(model=model, prefer=prefer)
     results = solver.solve(model, **options)

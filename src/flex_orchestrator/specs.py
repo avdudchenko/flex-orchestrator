@@ -41,12 +41,19 @@ FLEXPSE_FLOWSHEET = "flex-pse.flowsheet"
 FLEXPSE_SURROGATE = "flex-pse.surrogate"
 """str: Format family of a flex-pse ``SurrogateSpec``."""
 
+FLEXPSE_DESIGN = "flex-pse.design"
+"""str: Format of a flex-pse ``DesignSpec``. It has no version part: a design spec's
+``schema_version`` is the version of that study, not of the format."""
+
+_DESIGN_FIELDS = frozenset({"base", "years", "months", "capacities"})
+
 GENERIC_JSON = "json"
 """str: Format of any spec no validator knows."""
 
 VALIDATORS: dict[str, tuple[str, str]] = {
     FLEXPSE_FLOWSHEET: ("flexops", "flex_orchestrator.flexpse:validate_model_spec"),
     FLEXPSE_SURROGATE: ("flexops", "flex_orchestrator.flexpse:validate_surrogate_spec"),
+    FLEXPSE_DESIGN: ("flexdesign", "flex_orchestrator.flexpse:validate_design_spec"),
 }
 """dict: Format family -> (module that must be importable, validator import
 string). A validator takes the spec, raises :class:`SpecError` if it is invalid,
@@ -57,6 +64,7 @@ JSON."""
 _FAMILY_KIND: dict[str, SpecKind] = {
     FLEXPSE_FLOWSHEET: "model_spec",
     FLEXPSE_SURROGATE: "surrogate_spec",
+    FLEXPSE_DESIGN: "model_spec",
 }
 
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}")
@@ -213,6 +221,7 @@ def normalise_spec(
             kind, or validation fails.
     """
     data = to_json_spec(spec)
+    detected = spec_format is None
     spec_format = spec_format or detect_format(data)
     expected = _FAMILY_KIND.get(spec_format.partition("/")[0])
     if expected is not None and expected != kind:
@@ -222,6 +231,9 @@ def normalise_spec(
         )
     if validate:
         data = validate_spec(data, spec_format) or data
+        if detected:
+            # Validating can migrate the spec to a newer schema.
+            spec_format = detect_format(data)
     return data, spec_format
 
 
@@ -233,8 +245,8 @@ def detect_format(spec: Mapping[str, Any]) -> str:
 
     Returns:
         ``"flex-pse.flowsheet/<schema_version>"`` for a flex-pse flowsheet,
-        ``"flex-pse.surrogate"`` for a flex-pse surrogate spec, otherwise
-        ``"json"``.
+        ``"flex-pse.surrogate"`` for a flex-pse surrogate spec,
+        ``"flex-pse.design"`` for a flex-pse design study, otherwise ``"json"``.
 
     Example:
         >>> detect_format({"surrogate_type": "multilinear", "data": {}})
@@ -244,7 +256,14 @@ def detect_format(spec: Mapping[str, Any]) -> str:
         return f"{FLEXPSE_FLOWSHEET}/{spec['schema_version']}"
     if "surrogate_type" in spec and "data" in spec:
         return FLEXPSE_SURROGATE
+    if is_design_spec(spec):
+        return FLEXPSE_DESIGN
     return GENERIC_JSON
+
+
+def is_design_spec(spec: Mapping[str, Any]) -> bool:
+    """Whether a JSON spec is a flex-pse design study, from its shape."""
+    return _DESIGN_FIELDS <= spec.keys()
 
 
 def validate_spec(spec: dict[str, Any], spec_format: str) -> dict[str, Any] | None:
@@ -255,7 +274,7 @@ def validate_spec(spec: dict[str, Any], spec_format: str) -> dict[str, Any] | No
 
     Args:
         spec: A JSON spec.
-        spec_format: Its format, e.g. ``"flex-pse.flowsheet/0.1.0"``. The part
+        spec_format: Its format, e.g. ``"flex-pse.flowsheet/0.1.1"``. The part
             before ``/`` picks the validator.
 
     Returns:

@@ -13,6 +13,10 @@ thing:
 - ``model_inputs``: the stored data model variables are set from (D21);
 - ``cases``: named, hand-picked combinations of the above.
 
+``design`` (optional) runs each task as a design study: the model spec over every
+year and representative month, sizing shared capacities. Leave it out for an
+ordinary study.
+
 ``model_inputs`` (outside the sweeps) sets model variables from stored data in
 every task: a dataset, a stored result or general-store streams, selected as a
 fit's ``X`` and ``y`` are.
@@ -215,6 +219,92 @@ Sweep = Annotated[
 ]
 
 
+class PlanningYear(_Strict):
+    """One modeled year of a design study.
+
+    Attributes:
+        year: The calendar year.
+        represents: The calendar years it stands in for.
+    """
+
+    year: int
+    represents: int = 1
+
+
+class RepresentativeMonth(_Strict):
+    """One calendar month modeled in every planning year.
+
+    Attributes:
+        month: The calendar month, 1 to 12.
+        weight: The months of the year it stands in for; weights sum to 12.
+        days: Model only the first N days and scale the bill up to the full
+            month; the whole month if omitted.
+    """
+
+    month: int
+    weight: float
+    days: int | None = None
+
+
+class ParameterChange(_Strict):
+    """A change to one base element for some years and months.
+
+    Attributes:
+        element: The name of the base element.
+        values: The fields to deep-merge into it. Files named here are stored
+            with the spec.
+        years: The years it applies to; all if omitted.
+        months: The months it applies to; all if omitted.
+    """
+
+    element: str
+    values: dict[str, Any]
+    years: list[int] | None = None
+    months: list[int] | None = None
+
+
+class CapacityDecision(_Strict):
+    """One capacity the design study sizes, shared by every horizon.
+
+    Attributes:
+        name: The decision's name, e.g. ``"battery_energy"``.
+        variable: The scalar variable's path, e.g.
+            ``"battery.energy_capacity"``.
+        capital_cost: The overnight cost per unit of the variable.
+        lifetime_years: The asset life used to annualize it.
+        lower: The lower bound, in the variable's units.
+        upper: The upper bound, in the variable's units.
+    """
+
+    name: str
+    variable: str
+    capital_cost: float
+    lifetime_years: float
+    lower: float = 0.0
+    upper: float
+
+
+class DesignStudy(_Strict):
+    """Run each task's model spec as a flex-pse design study.
+
+    This mirrors flex-pse's ``DesignSpec``; flex-pse checks the rules (weights
+    sum to 12, years are consecutive) before any task runs.
+
+    Attributes:
+        schema_version: The version of this study.
+        years: The modeled years, ascending.
+        months: The representative months.
+        changes: Changes to base elements, applied in order.
+        capacities: What to size.
+    """
+
+    schema_version: str = "0.1.0"
+    years: list[PlanningYear] = Field(min_length=1)
+    months: list[RepresentativeMonth] = Field(min_length=1)
+    changes: list[ParameterChange] = Field(default_factory=list)
+    capacities: list[CapacityDecision] = Field(min_length=1)
+
+
 class HooksConfig(_Strict):
     """Hooks for the study's tasks: import strings or registered names (D1).
 
@@ -317,6 +407,8 @@ class StudyConfig(_Strict):
             omitted.
         base_model_spec: The model spec every task builds from, unless a
             ``spec_list`` sweep names others.
+        design: Run every task as a design study (:class:`DesignStudy`). Can't
+            be combined with ``model_inputs``.
         fits: ``fit_surrogate`` parameters, run before the sweeps.
         model_inputs: Model variables every task sets from stored data (D21):
             fit selectors, each column (after ``rename``) named by the path it
@@ -327,7 +419,8 @@ class StudyConfig(_Strict):
             :class:`ModelInputsSweep` and :class:`CasesSweep`.
         combine: ``product`` (every combination) or ``zip`` (the sweeps in
             step; they must be the same length).
-        solve_options: Passed to the solve hook.
+        solve_options: Passed to the solve hook. For flex-pse: ``prefer``,
+            ``tee``, ``warmstart``, ``mip_gap``, ``time_limit`` and ``options``.
         export: See :class:`ExportConfig`.
         output_name: Each task's tag, e.g.
             ``"ro_{surrogate}_{plant.ro.recovery}"``: fields are the sweeps'
@@ -345,6 +438,7 @@ class StudyConfig(_Strict):
 
     study: str | None = None
     base_model_spec: str | None = None
+    design: DesignStudy | None = None
     fits: list[FitParams] = Field(default_factory=list)
     model_inputs: list[ModelInput] = Field(default_factory=list)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
@@ -355,6 +449,26 @@ class StudyConfig(_Strict):
     output_name: str | None = None
     on_existing: Literal["error", "skip", "replace"] = "error"
     execution: Execution = Field(default_factory=Execution)
+
+    @model_validator(mode="after")
+    def _design_without_inputs(self) -> "StudyConfig":
+        if self.design is None:
+            return self
+        swept = any(
+            isinstance(sweep, ModelInputsSweep)
+            or (
+                isinstance(sweep, CasesSweep)
+                and any(case.model_inputs for case in sweep.cases)
+            )
+            for sweep in self.sweeps
+        )
+        if self.model_inputs or swept:
+            raise ValueError(
+                "design can't be combined with model_inputs yet: use the design's "
+                "changes, with {'$source': path} files, for data that varies by "
+                "horizon."
+            )
+        return self
 
 
 def load_config(config: Any) -> StudyConfig:

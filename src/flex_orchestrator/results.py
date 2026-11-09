@@ -23,7 +23,6 @@ declared with: a later run exporting it in another unit of the same dimensions
 is converted, and one whose units don't convert raises.
 """
 
-import fnmatch
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -35,7 +34,11 @@ import polars as pl
 from flex_orchestrator import frames
 from flex_orchestrator.backend.base import StorageBackend, Variable, to_rows, to_utc
 from flex_orchestrator.errors import ExportError, StorageError, UnitError
-from flex_orchestrator.export.model_data import ExportedSeries, ModelData
+from flex_orchestrator.export.model_data import (
+    ExportedSeries,
+    ModelData,
+    path_matches,
+)
 from flex_orchestrator.export.units import conversion_factor
 
 MODEL_VALUES = "model_values"
@@ -272,8 +275,7 @@ def select(data: ModelData, patterns: Iterable[str]) -> ModelData:
     for series in data:
         for pattern in patterns:
             if pattern in (series.key, series.component) or any(
-                fnmatch.fnmatchcase(name, pattern)
-                for name in (series.key, series.component)
+                path_matches(name, pattern) for name in (series.key, series.component)
             ):
                 chosen.append(series)
                 used.add(pattern)

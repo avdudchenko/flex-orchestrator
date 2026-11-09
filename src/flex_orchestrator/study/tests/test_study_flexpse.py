@@ -29,7 +29,7 @@ def ro_spec():
     p = "plant"
     unit = {"kind": "unit"}
     return {
-        "schema_version": "0.1.0",
+        "schema_version": "0.1.1",
         "name": "ro_day",
         "elements": [
             {

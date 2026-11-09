@@ -15,7 +15,6 @@ would match by value. This module depends only on pyomo; flex-pse's TimeBlock is
 found by its ``time_index`` / ``datetime_index`` attributes.
 """
 
-import fnmatch
 import math
 import warnings
 from collections.abc import Iterable, Iterator, Sequence
@@ -27,7 +26,11 @@ from pyomo.core.base.set import SetProduct
 from pyomo.environ import units as pyunits
 
 from flex_orchestrator.errors import ExportError
-from flex_orchestrator.export.model_data import ExportedSeries, ModelData
+from flex_orchestrator.export.model_data import (
+    ExportedSeries,
+    ModelData,
+    path_matches,
+)
 from flex_orchestrator.export.units import UnitMapper
 
 _CTYPES = (pyo.Var, pyo.Expression, pyo.Param)
@@ -63,10 +66,13 @@ def export_model_data(
         exclude: Glob patterns that drop a component.
         time_sets: The time Sets, main one first. Further entries are subsets of
             the main one, e.g. every point but the first; a subset counts as
-            time only if listed here. When omitted, the main time Set of the
-            model's TimeBlock is used, without subsets; for a flex-pse model,
-            pass ``flex_orchestrator.flexpse.time_sets(model)`` (the default
-            ``time_sets`` hook) to include the subsets flex-pse builds.
+            time only if listed here. A later Set that is its own block's
+            ``time_index`` starts a new axis, for a model with several time
+            blocks, and each block's values get that block's timestamps. When
+            omitted, the main time Set of the model's TimeBlock is used, without
+            subsets; for a flex-pse model, pass
+            ``flex_orchestrator.flexpse.time_sets(model)`` (the default ``time_sets``
+            hook) to include the subsets flex-pse builds.
         datetime_index: One timestamp per element of the main time Set, in
             order. When omitted, taken from the block that holds the main time
             Set (flex-pse's TimeBlock); without either, the raw time values are
@@ -141,8 +147,21 @@ class _Timeline:
                     f"time set {main.name!r} has {len(main)}."
                 )
 
+    def axis(self, index_set: Any) -> "_Timeline":
+        return self
+
     @classmethod
-    def build(cls, model, time_sets, datetime_index) -> "_Timeline":
+    def build(cls, model, time_sets, datetime_index) -> "_Timeline | _Timelines":
+        axes = _split_axes(time_sets or [])
+        if len(axes) > 1:
+            if datetime_index is not None:
+                raise ExportError(
+                    "datetime_index= can't be used with several time blocks; each "
+                    "block's own datetimes are used."
+                )
+            return _Timelines(
+                [cls(axis, axis[0].parent_block().datetime_index) for axis in axes]
+            )
         if time_sets is not None:
             if datetime_index is None and time_sets:
                 # A flex-pse time set sits on its TimeBlock, next to the datetimes.
@@ -179,6 +198,32 @@ class _Timeline:
         return self.datetime_index[self.positions[value]]
 
 
+class _Timelines:
+    """One :class:`_Timeline` per time block of a model with several."""
+
+    def __init__(self, axes: list[_Timeline]) -> None:
+        self.axes = axes
+
+    def is_time(self, index_set: Any) -> bool:
+        return any(axis.is_time(index_set) for axis in self.axes)
+
+    def axis(self, index_set: Any) -> _Timeline:
+        factors = [index_set, *_factors(index_set)]
+        return next(a for a in self.axes if any(a.is_time(f) for f in factors))
+
+
+def _split_axes(time_sets: Sequence[pyo.Set]) -> list[list[pyo.Set]]:
+    """Group time Sets by axis: a block's own ``time_index`` starts a new one."""
+    axes: list[list[pyo.Set]] = []
+    for time_set in time_sets:
+        same_model = axes and time_set.model() is axes[0][0].model()
+        owner = time_set.parent_block()
+        if not axes or (same_model and getattr(owner, "time_index", None) is time_set):
+            axes.append([])
+        axes[-1].append(time_set)
+    return axes
+
+
 def _select(model, keys, include, exclude) -> Iterator[tuple[Any, bool, set | None]]:
     """Yield ``(component, named in keys, only these indices)`` to export."""
     done: set[int] = set()
@@ -206,9 +251,9 @@ def _select(model, keys, include, exclude) -> Iterator[tuple[Any, bool, set | No
         path = component.getname(fully_qualified=True, relative_to=model)
         if any(part.startswith("_") for part in path.split(".")):
             continue
-        if include and not any(fnmatch.fnmatchcase(path, p) for p in include):
+        if include and not any(path_matches(path, p) for p in include):
             continue
-        if any(fnmatch.fnmatchcase(path, p) for p in exclude):
+        if any(path_matches(path, p) for p in exclude):
             continue
         yield component, False, None
 
@@ -267,6 +312,7 @@ def _export_component(
             yield series("scalar", key, raw, [(index, None)])
         return
 
+    axis = timeline.axis(component.index_set())
     groups: dict[tuple, list[tuple[Any, Any]]] = {}
     for index, _ in elements:
         raw = _as_tuple(index)
@@ -274,13 +320,13 @@ def _export_component(
         custom = raw[:time_offset] + raw[time_offset + 1 :]
         groups.setdefault(custom, []).append((index, t))
     for custom, points in groups.items():
-        points.sort(key=lambda point: timeline.positions[point[1]])
+        points.sort(key=lambda point: axis.positions[point[1]])
         key = (
             path
             if not custom
             else path + index_repr(custom[0] if len(custom) == 1 else custom)
         )
-        stamped = [(index, timeline.timestamp(t)) for index, t in points]
+        stamped = [(index, axis.timestamp(t)) for index, t in points]
         yield series("timeseries", key, custom, stamped)
 
 

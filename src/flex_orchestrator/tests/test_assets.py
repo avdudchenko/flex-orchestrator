@@ -18,11 +18,11 @@ from flex_orchestrator.specs import SpecRecord, record_hash, spec_hash
 
 pytestmark = pytest.mark.unit
 
-FLOWSHEET = "flex-pse.flowsheet/0.1.0"
+FLOWSHEET = "flex-pse.flowsheet/0.1.1"
 
 
 def costing(**fields):
-    return {"schema_version": "0.1.0", "elements": [{"kind": "costing", **fields}]}
+    return {"schema_version": "0.1.1", "elements": [{"kind": "costing", **fields}]}
 
 
 def test_flexpse_tariff_sources_of_every_shape():
@@ -39,7 +39,7 @@ def test_flexpse_tariff_sources_of_every_shape():
 
 def test_flexpse_source_refs_anywhere():
     spec = {
-        "schema_version": "0.1.0",
+        "schema_version": "0.1.1",
         "elements": [
             {
                 "kind": "costing",

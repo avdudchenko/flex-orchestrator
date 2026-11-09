@@ -33,7 +33,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from flex_orchestrator.assets import materialize_spec
+from flex_orchestrator.assets import collect_assets, find_assets, materialize_spec
 from flex_orchestrator.errors import HookError, TagExistsError
 from flex_orchestrator.export import ModelData, UnitMapper, export_model_data
 from flex_orchestrator.hooks import (
@@ -46,8 +46,9 @@ from flex_orchestrator.hooks import (
 )
 from flex_orchestrator.inputs.models import ModelInput
 from flex_orchestrator.orchestrator import MODEL_SPEC, RESULT_KIND
-from flex_orchestrator.specs import normalise_spec
+from flex_orchestrator.specs import is_design_spec, normalise_spec
 from flex_orchestrator.study.config import ExportConfig
+from flex_orchestrator.study.design import compose_design, summary_selection
 
 
 class SurrogateChoice(BaseModel):
@@ -73,6 +74,7 @@ class TaskSpec(BaseModel):
         index: Its position in the study, from 0.
         tag: The result's tag (and the derived spec's, with surrogates).
         base: The model spec it builds from (or derives from).
+        design: A dumped ``DesignStudy``: ``base`` runs as this design study.
         configuration: ``{option path: value}``, set in ``base`` first.
         surrogates: Surrogates applied to ``base`` (after the configuration).
         overrides: Passed to the build hook: the variables to fix.
@@ -93,6 +95,7 @@ class TaskSpec(BaseModel):
     index: int
     tag: str
     base: str
+    design: dict[str, Any] | None = None
     configuration: dict[str, Any] = Field(default_factory=dict)
     surrogates: list[SurrogateChoice] = Field(default_factory=list)
     overrides: dict[str, Any] = Field(default_factory=dict)
@@ -111,8 +114,8 @@ class TaskSpec(BaseModel):
 
     @property
     def derives(self) -> bool:
-        """Whether it stores a derived spec (it sets options or surrogates)."""
-        return bool(self.configuration or self.surrogates)
+        """Whether it stores a derived spec (a design, options or surrogates)."""
+        return bool(self.design or self.configuration or self.surrogates)
 
 
 class TaskResult(BaseModel):
@@ -288,6 +291,8 @@ def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
     selection = task.export.model_dump(include={"keys", "include", "exclude"})
     if all(v is None for v in selection.values()):
         selection = {**selection, **orch.default_export_selection()}
+    if all(v is None for v in selection.values()) and is_design_spec(record.spec):
+        selection = {**selection, **summary_selection(record.spec)}
     overrides, provenance = dict(task.overrides), []
     if task.model_inputs or task.swept_inputs:
         found = orch._resolve_inputs(
@@ -514,6 +519,8 @@ def _spec(orch: Any, task: TaskSpec, hooks: HookSet, replace: bool) -> str:
     if not task.derives:
         return task.base
     spec = copy.deepcopy(orch.model_spec(task.base).spec)
+    if task.design:
+        spec = compose_design(spec, task.design, task.tag)
     if task.configuration:
         configure = _hook(orch, hooks, "configure")
         for path, value in task.configuration.items():
@@ -527,7 +534,12 @@ def _spec(orch: Any, task: TaskSpec, hooks: HookSet, replace: bool) -> str:
         orch.store_model_spec(task.tag, spec, parent=task.base, replace=replace)
     except TagExistsError:
         stored = orch.model_spec(task.tag)
-        data, _ = normalise_spec(MODEL_SPEC, spec)
+        data, spec_format = normalise_spec(MODEL_SPEC, spec)
+        # A design's changes can name local files; the stored spec holds their
+        # stored names, and the parent's files keep theirs.
+        parent, files = orch._read_spec(MODEL_SPEC, task.base)
+        known = {ref.name: (ref, files[ref.name]) for ref in parent.assets.values()}
+        data, _, _ = collect_assets(data, find_assets(data, spec_format), known=known)
         if stored.parent_tag != task.base or stored.spec != data:
             raise TagExistsError(
                 f"Model spec {task.tag!r} is stored and differs from the one this "

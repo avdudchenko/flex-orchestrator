@@ -30,7 +30,7 @@ from flex_orchestrator.fitting.models import FitSummary
 from flex_orchestrator.hooks import HookSet
 from flex_orchestrator.inputs.models import InputSet, ModelInput
 from flex_orchestrator.orchestrator import RESULT_KIND
-from flex_orchestrator.specs import check_tag
+from flex_orchestrator.specs import check_tag, is_design_spec, normalise_spec
 from flex_orchestrator.study.config import (
     Case,
     CasesSweep,
@@ -41,6 +41,7 @@ from flex_orchestrator.study.config import (
     SurrogateSweep,
     VariableSweep,
 )
+from flex_orchestrator.study.design import compose_design
 from flex_orchestrator.study.task import (
     SurrogateChoice,
     TaskResult,
@@ -126,7 +127,9 @@ def execute_study(
         What ran, or with ``dry_run`` the plan.
 
     Raises:
-        StudyConfigError: If the config doesn't expand (see :func:`expand`).
+        StudyConfigError: If the config doesn't expand (see :func:`expand`), or
+            combines a design study with something it can't run with.
+        SpecError: If flex-pse rejects the config's design.
         TagExistsError: With ``on_existing: error``, if a tag is stored.
         HookError: If a hook can't be resolved, or can't run on Ray.
         CommandCancelled: If ``progress`` is cancelled.
@@ -154,6 +157,7 @@ def _execute(
     if cfg.study is not None:
         orch.get_or_create_study(cfg.study)
     tasks = expand(cfg)
+    _check_design(orch, cfg, tasks)
     planned_fits = [plan.tag for fit in cfg.fits for plan in fit.expand()]
     run = StudyRun(study=orch.study, planned_fits=planned_fits, tasks=tasks)
     if params.dry_run:
@@ -183,6 +187,38 @@ def _execute(
 
 
 EXECUTE_STUDY = execute_study
+
+
+def _check_design(orch: Any, cfg: StudyConfig, tasks: list[TaskSpec]) -> None:
+    """Refuse a design study that can't run, before anything does.
+
+    A base that isn't stored is left to its tasks, as in any study: a fit or
+    another process may yet store it.
+
+    Raises:
+        StudyConfigError: If a task's base is already a design study and the
+            config has a ``design`` or sets model inputs from data.
+        SpecError: If flex-pse rejects the composed design.
+    """
+    for base in sorted({task.base for task in tasks}):
+        try:
+            spec = orch.model_spec(base).spec
+        except LookupError:
+            continue
+        if is_design_spec(spec):
+            if cfg.design is not None:
+                raise StudyConfigError(
+                    f"{base!r} is already a design study, so the config can't "
+                    "have a design too."
+                )
+            if any(task.model_inputs or task.swept_inputs for task in tasks):
+                raise StudyConfigError(
+                    f"{base!r} is a design study, which can't use model_inputs "
+                    "yet: use its changes, with {'$source': path} files."
+                )
+        elif cfg.design is not None:
+            design = cfg.design.model_dump(mode="json")
+            normalise_spec("model_spec", compose_design(spec, design, base))
 
 
 def expand(cfg: StudyConfig) -> list[TaskSpec]:
@@ -231,6 +267,7 @@ def expand(cfg: StudyConfig) -> list[TaskSpec]:
                 index=index,
                 tag=tag,
                 base=task.base,
+                design=cfg.design.model_dump(mode="json") if cfg.design else None,
                 configuration=task.configuration,
                 surrogates=task.surrogates,
                 overrides=task.variables,

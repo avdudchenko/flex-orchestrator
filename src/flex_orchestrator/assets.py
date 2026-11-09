@@ -70,11 +70,14 @@ def find_assets(
     Raises:
         SpecError: If a pointer doesn't name a string in the spec.
     """
-    from flex_orchestrator.specs import FLEXPSE_FLOWSHEET
+    from flex_orchestrator.specs import FLEXPSE_DESIGN, FLEXPSE_FLOWSHEET
 
     found = {}
-    if spec_format.partition("/")[0] == FLEXPSE_FLOWSHEET:
+    family = spec_format.partition("/")[0]
+    if family == FLEXPSE_FLOWSHEET:
         found.update(flexpse_assets(spec))
+    elif family == FLEXPSE_DESIGN:
+        found.update(flexpse_design_assets(spec))
     for pointer in pointers:
         value = get_pointer(spec, pointer)
         if not isinstance(value, str):
@@ -110,6 +113,36 @@ def flexpse_assets(spec: Mapping[str, Any]) -> dict[str, str]:
         if isinstance(dr, Mapping):
             _sources(found, f"/elements/{i}/dr/events_source", dr.get("events_source"))
     _source_refs(found, "", spec)
+    return found
+
+
+def flexpse_design_assets(spec: Mapping[str, Any]) -> dict[str, str]:
+    """Find the files a flex-pse design study references.
+
+    These are the files of its ``base`` flowsheet (:func:`flexpse_assets`), plus
+    those its ``changes`` bring: ``{"$source": path}`` values anywhere, and a
+    costing element's ``tariff_source`` and ``dr.events_source``.
+
+    Returns:
+        ``{JSON pointer: path}``.
+    """
+    base = spec.get("base")
+    base = base if isinstance(base, Mapping) else {}
+    found = {f"/base{p}": path for p, path in flexpse_assets(base).items()}
+    costing = {
+        e.get("name")
+        for e in base.get("elements") or []
+        if isinstance(e, Mapping) and e.get("kind") == "costing"
+    }
+    for i, change in enumerate(spec.get("changes") or []):
+        values = change.get("values") or {}
+        pointer = f"/changes/{i}/values"
+        if change.get("element") in costing:
+            _sources(found, f"{pointer}/tariff_source", values.get("tariff_source"))
+            dr = values.get("dr")
+            if isinstance(dr, Mapping):
+                _sources(found, f"{pointer}/dr/events_source", dr.get("events_source"))
+        _source_refs(found, pointer, values)
     return found
 
 

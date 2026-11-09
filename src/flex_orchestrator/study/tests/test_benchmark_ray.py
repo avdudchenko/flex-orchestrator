@@ -46,7 +46,7 @@ def month_spec():
     p, unit = "plant", {"kind": "unit"}
     flow = "m^3/hr"
     return {
-        "schema_version": "0.1.0",
+        "schema_version": "0.1.1",
         "name": "ro_month",
         "elements": [
             {

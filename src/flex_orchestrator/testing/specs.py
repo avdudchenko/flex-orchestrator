@@ -21,7 +21,7 @@ def _load(name: str) -> dict:
 
 
 DEMO_SPEC: dict = {
-    "schema_version": "0.1.0",
+    "schema_version": "0.1.1",
     "name": "demo",
     "elements": [
         {
@@ -67,13 +67,15 @@ DEMO_SPEC: dict = {
             "name": "demo.battery",
             "unit_model_class": "BatteryModel",
             "property_package": None,
-            "construction_options": {"capacity": {"value": 10.0, "units": "kWh"}},
+            "construction_options": {
+                "energy_capacity": {"value": 10.0, "units": "kWh"}
+            },
         },
         {"kind": "objective", "name": "objective"},
     ],
 }
-"""dict: A six-hour version of flex-pse 0.2's ``plant_config_demo.json``
-(schema 0.1.0) with a flat energy price instead of a tariff file, so it builds
+"""dict: A six-hour version of flex-pse's ``plant_config_demo.json``
+(schema 0.1.1) with a flat energy price instead of a tariff file, so it builds
 from any working directory."""
 
 LINEAR_POWER: dict = {
