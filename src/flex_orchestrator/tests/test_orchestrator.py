@@ -51,13 +51,13 @@ def test_create_select_and_get_or_create(memory_backend):
     orch = Orchestrator(memory_backend)
     with pytest.raises(StudyNotFoundError, match="No study is selected"):
         orch.store_model_results("a", model=None)
-    assert orch.create_study("example_a") == orch.study == "example_a"
+    assert orch.create_study("example_a").study == orch.study == "example_a"
     with pytest.raises(StudyExistsError, match="select_study"):
         orch.create_study("example_a")
     with pytest.raises(StudyNotFoundError, match="create_study"):
         orch.select_study("example_b")
-    assert orch.get_or_create_study("example_b") == "example_b"
-    assert orch.get_or_create_study("example_a") == "example_a"
+    assert orch.get_or_create_study("example_b").study == "example_b"
+    assert orch.get_or_create_study("example_a").study == "example_a"
     assert Orchestrator(memory_backend, study="example_b").study == "example_b"
 
 

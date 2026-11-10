@@ -7,25 +7,25 @@ data, specs, model results and units. It should support four ways of working:
 2. **Coming back later.** Reopen a study, query results as polars or pandas, rebuild a stored model and re-solve it.
 3. **Config-driven studies.** One JSON/YAML file describes a sweep, and `execute_study` runs all of it, in parallel
    with Ray.
-4. **HTTP service.** A FastAPI server lets a UI and other tools submit studies and fetch results as JSON.
+4. **Embedded in a host application.** A separate project (the web service and UI) calls this library to submit
+   studies and fetch results. flex-orchestrator provides the library and its contract (D16); it has no HTTP of its
+   own.
 
-**Development is split into two phases:**
-- **Phase 1, the core library (M0–M6).** Use cases 1–3 as a Python library, plus a deployable single-tenant stack with
-  Postgres backups. There is no HTTP in this phase.
-- **Phase 2, HTTP and integrations (M7–M8).** HTTP routes, token auth, and integration with the multi-user control
-  plane and UI.
+**Scope (decided 2026-11-09):** flex-orchestrator is the **core library only (M0–M6)**: use cases 1–3, plus what a host
+application needs to embed it (D16). The HTTP service, authentication, multi-tenant hosting, gateway, tenant stacks
+and their backups are **handled elsewhere**, in the host project. The earlier Phase 2 (M7–M8: HTTP routes, token auth,
+control-plane integration) is dropped from this repo; it was prototyped on the `M8` branch, which stays as a reference
+the host project can lift code from.
 
-The core library must never import the server code, so Phase 2 is a thin layer added on top.
+**Deployment model (D14), now the host project's:** fewer than 100 users, organised into **tenants
+(groups/projects)**, each with its own isolated stack (an orchestrator and an Acquirium, its own database on a shared
+Postgres cluster, its own data volume, network and Ray). D14 stays below as the requirements handed over; what the
+library must do for it is in D16.
 
-**Deployment model (D14):** fewer than 100 users, organised into **tenants (groups/projects)**. **Each tenant gets its
-own isolated stack**:
-- an orchestrator and an Acquirium;
-- its own database on a shared Postgres cluster;
-- its own data volume, network and Ray.
-
-Users and groups must never be able to reach another tenant's data, configs or compute.
-
-This document is the plan only. No orchestrator code has been written yet.
+**Where we are (2026-11-09):** M0–M5.6 are built on `main`, plus design studies (D22). M6 as redefined below (a
+long-lived Acquirium, configuration from the environment, thread safety, `verify`, spec files as bytes) is built;
+open are its `0.1.0` release and the leftovers listed per milestone (the docs site, mode 2 on TimescaleDB, the
+2-node Ray run).
 
 ---
 
@@ -33,12 +33,12 @@ This document is the plan only. No orchestrator code has been written yet.
 
 | Piece | Where | Status / notes |
 |---|---|---|
-| Study / experiment ledger | Acquirium `main` (`227e3f6`, PR #78 merged; was `6335f52` on its branch): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .table() .timeseries(unit=, observed=, keys=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | No release has it yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
+| Study / experiment ledger | Acquirium `main` (`b7f6fc8`, 2026-11-09, `v0.4.0a9`; PR #78 merged as `227e3f6`, was `6335f52` on its branch): `ac.study.define/get/all`, `study.input/output/log(...)`, `.json() .scalar(unit=) .text() .file() .table() .timeseries(unit=, observed=, keys=)`, `study.start()/finish()/fail()`, `study.experiments.where(status=, **metadata)` | No release has it yet, so we pin to the commit. Runs are append-only and can't be changed. Works on DuckDB (local) or Timescale/Postgres. |
 | Variable declarations | `ExperimentStore.declare` (`Experiments.py:204`) | Within a study, a label's role, kind and metadata (**including unit**) are fixed. Re-declaring it with a different shape raises an error. |
 | Study creation | `ExperimentStore.define` (`Experiments.py:193`) | **Silently idempotent by name**: it returns the existing study instead of failing. The orchestrator has to guard against duplicates itself. |
 | Deletion | — | **There is no way to delete a study, run or observation.** `Manager.delete_timeseries` (`manager.py:809`) deliberately raises an error. The only reset is `recreate=True`, which wipes the whole database. |
 | Graph metadata | `ac.insert_metadata(uri, values)` | Stored **only in Oxigraph**, not in Postgres (see the state table below). So it is *not* used for anything that must survive a Postgres-only restore. |
-| Querying | `ac.query()` / `ac.explore()` builder, `ac.attr.*` expressions, `find_entity`, `find_all_data`, `sparql`, `Q.data()/.dataframe()`, `study.experiments.where(...).frame()` | Returns **polars**. |
+| Querying | `ac.query()` / `ac.explore()` builder, `ac.attr.*` expressions, `find_all_data`, `sparql`, `Q.data()/.dataframe()`, `study.experiments.where(...).frame()` | Returns **polars**. |
 | Units | QUDT ontology bundled; `client.resolve_unit("gal/min")` (`client.py:801`), `/resolve_conversion`, `/conversion_factors` | Turns free-form unit strings into QUDT units. |
 | FlexPSE ↔ Acquirium example | `acquirium/examples/flexpse/record_experiment.py` | Reference pattern (it reads values by hand with `pyo.value` and `pyo.units.convert`). |
 | Model spec | flex-pse 0.3 flowsheet spec: `FlowsheetSpec` (schema `0.1.1`; `0.1.0` migrates on load), a flat list of `elements` whose `name` is the component's model path; `flexcore.config.io.load_spec` | The default spec format. Older `ModelConfig` documents (schema `0.0.x`) are not used. |
@@ -94,8 +94,7 @@ together** (D14).
 - `get_data('biogas_volume')` reads one column, but the data was stored as the dataset `'biog_gas_data'`
   (D6 covers lookup by column).
 - `Orchestrator(db, username, password)`: in the library, the database credentials come from the environment or a
-  secret file, not from arguments typed into scripts (D11). User login is handled by the control plane and tokens in
-  Phase 2 (D15).
+  secret file, not from arguments typed into scripts (D11). User login is the host application's (D16).
 
 ---
 
@@ -138,7 +137,7 @@ class SolveFn(Protocol):
   1. As callables to `execute_study(cfg, build=my_build, solve=my_solve)` or `Orchestrator(..., build=, solve=)`.
   2. Registered by name with `orch.register_hooks("my_model", build=..., solve=...)` (**built**).
   3. As **import strings** in a study config, `build: "mypkg.models:build"`. Ray workers need this form (D13), and so
-     does the Phase 2 HTTP API.
+     does a host application that receives configs as JSON (D16).
 - A user who writes their own `ExportFn` can store models that aren't Pyomo at all.
 
 **D2 — Specs are stored as data.**
@@ -475,7 +474,7 @@ own rules.
 - **Specs.** A content hash (`spec_hash`, sha256 of canonical JSON) is stored with each spec. `execute_study` uses
   the hash plus the overrides to skip runs that already succeeded (resume).
 - **Races.** Check-then-write isn't atomic in Acquirium. Mitigations:
-  - one writing process per tenant: the main process in D13, and in Phase 2 the tenant's orchestrator service;
+  - one writing process per tenant: the main process in D13, and in a host application its one worker per tenant (D16);
   - an in-process lock for each study, held from the tag check to the end of the write;
   - **a check after every write**: if two live runs carry the same tag, the earliest one wins; the later one is
     deleted and its call fails with `TagExistsError`. With `replace=True` the latest wins instead.
@@ -508,8 +507,8 @@ backends). The race check is tested by letting a rival write land between the ta
 | `<s>::fits` | one `fit_surrogate` variant (D19) | inputs `fit_params` (the fit as planned, selectors as sent), `training_data` (what they resolved to, prep steps, rows, units, `data_hash`) (`.json`); outputs `fit_result` (coefficients, metrics, diagnostics, holdout) (`.json`), optional `fit_series` (`.table`: `actual`/`fitted`/`residual`); metadata `{flexorch_kind: "fit", flexorch_tag, regressor, data_hash}` |
 | `flexorch::commands` | one command call (D18) | input `params`, output `result` (`.json`); metadata `{flexorch_kind: "command", flexorch_tag: <command>, flexorch_study, flexorch_runtime}` |
 
-Every run's metadata also records the orchestrator, flex-pse and Acquirium versions, the user (from the environment
-in Phase 1, from the token in Phase 2), and the hook names, so a result can be reproduced.
+Every run's metadata also records the orchestrator, flex-pse and Acquirium versions, the user (from the environment,
+`FLEXORCH_USER`, which a host sets from its own login), and the hook names, so a result can be reproduced.
 
 **Built** for `<s>`, `<s>::runs` and `<s>::data` (the `LEDGERS` map in `orchestrator.py`). Run metadata holds:
 - `flexorch_kind`, `flexorch_tag`;
@@ -558,8 +557,8 @@ orch = Orchestrator(acquirium_url="http://acquirium:8000")
   - the role can create tables;
   - a lock record in the database refuses a second managed server that uses a different `data_dir`.
 - **Never `recreate`.** The orchestrator never sets it, and rejects configs that do.
-- **Mode 3** needs no database credentials at all. In Phase 1 the network around the tenant stack is what protects
-  Acquirium (D14). Phase 2 adds token auth at the orchestrator (D15).
+- **Mode 3** needs no database credentials at all. The network around the tenant stack is what protects Acquirium
+  (D14), and the host application checks who may call (D16).
 
 **Built** in `flex_orchestrator.connection`; `Orchestrator(backend=None, *, data_dir, db, acquirium_url,
 db_credentials)` calls `connect()`, and `orch.connection` / `orch.close()` / `with Orchestrator(...)` manage it.
@@ -672,7 +671,7 @@ orch.import_study("exports/example_a", name=None, on_existing="error")          
 - **Isolation (D14):** export and import run inside one tenant's stack. Moving a study to another tenant is an
   explicit two-step operation by someone with access to both: export from A, then import into B. No route reaches
   across tenants.
-- CLI: `flex-orch export <study> <path>` and `flex-orch import <path>`. Phase 2 routes are in §4.
+- CLI: `flex-orch export <study> <path>` and `flex-orch import <path>`.
 
 **Built** (M3) in `flex_orchestrator.archive`, as specified, with these details settled:
 - **Layout.** A spec's referenced files are written under `specs/` by their stored names
@@ -691,13 +690,14 @@ orch.import_study("exports/example_a", name=None, on_existing="error")          
   `flexorch_imported_from: {study, exported_at, exported_by, run_id, metadata}`. `on_existing="skip"` imports into an
   existing study, skipping the items it has. A result whose spec is stored with another hash is refused; one whose
   spec isn't in the export is imported unlinked.
-- `tenant` is `None` in Phase 1. The JSON Schemas are in `docs/schemas/` (`python -m flex_orchestrator.schemas`
+- `tenant` is `None` (the store is the tenant). The JSON Schemas are in `docs/schemas/`
+  (`python -m flex_orchestrator.schemas`
   writes them; a test checks they're current).
 
 **D18 — Extension API: commands, plugins, subclassing, custom routes.** Users can extend the orchestrator without
-forking it. **Commands are the main extension point.** They live in the core library (Phase 1, no FastAPI), and
-Phase 2 exposes them over HTTP automatically. Custom FastAPI routes come in Phase 2 and inherit auth and tenant checks
-by default.
+forking it. **Commands are the main extension point.** They live in the core library (no FastAPI), and a host
+application can expose them over HTTP from their parameter models (D16). Custom routes are the host's: a plugin may
+carry `routers` for a host to mount.
 
 *Commands* (`flex_orchestrator.ext`):
 
@@ -718,14 +718,13 @@ def price_sweep(orch: Orchestrator, params: PriceSweepParams, progress: Progress
 - One definition is callable from everywhere:
   - Python: `orch.run_command("price_sweep", prices=[0.1, 0.2], base_tag="base")`;
   - CLI: `flex-orch cmd price_sweep --prices 0.1 0.2 --base-tag base` (options generated from the params model);
-  - HTTP (Phase 2): `POST /commands/price_sweep` returns `202 {job_id}`. The body is checked against the params
-    model, and the OpenAPI schema is generated from it.
+  - a host application: the same call from its own route, its body checked against the params model's JSON
+    Schema.
 - What commands get for free:
   - checking parameters against the pydantic model;
   - a `Progress` object that reports progress and handles cancellation;
   - recording each call as a run (inputs, outcome, user) in `<tenant>::commands`, so every call has a record;
-  - `role` enforcement in Phase 2;
-  - `long_running=True` sends the call through the job queue.
+  - `role` and `long_running`, recorded for a host to enforce and to queue.
 - **`execute_study` is itself a built-in command.** There is one execution and job path for built-in and custom
   work, not two.
 - Command names are unique. A collision with a built-in or another plugin fails at startup.
@@ -739,7 +738,7 @@ plugin = Plugin(
     commands=[price_sweep],
     hooks={"digester_build": "digester_tools.models:build"},   # named D1 hooks
     orchestrator_cls=DigesterOrchestrator,   # optional subclass (below)
-    routers=[router],                        # Phase 2 only: fastapi.APIRouter instances
+    routers=[router],                        # held for a host application to mount
     on_startup=..., on_shutdown=...,
 )
 ```
@@ -752,7 +751,7 @@ plugin = Plugin(
   passed explicitly. Being installed isn't enough, so each tenant can enable a different set.
 - **Version check:** if a plugin's `api_version` range doesn't include `PLUGIN_API_VERSION`, it fails at startup with
   a clear error.
-- `routers` are accepted only when `server/` is loaded, so the core library still never imports FastAPI.
+- `routers` are held without being imported or mounted, so the core library never imports FastAPI.
 
 *Subclassing the orchestrator* is supported, with a deliberately small stable surface:
 - These methods are stable to override:
@@ -764,36 +763,24 @@ plugin = Plugin(
 - **Lifecycle events** (`study_created`, `spec_stored`, `result_stored`, `job_finished`, `command_finished`) are a
   lighter alternative: `@orch.on("result_stored")` or `Plugin(on_events={...})`.
 - Everything not documented as stable is internal (prefixed with `_`, and not part of the semver promise).
-- The server builds its orchestrator from `Plugin.orchestrator_cls`, falling back to `Orchestrator`. If two enabled
-  plugins provide subclasses, startup fails.
+- A host builds its orchestrator from `Plugin.orchestrator_cls` (`ext.create_orchestrator`), falling back to
+  `Orchestrator`. If two enabled plugins provide subclasses, startup fails.
 
-*Custom FastAPI routes (Phase 2):*
-- Build apps only through **`create_app(settings, plugins)`**. There is no module-level `app` created at import time.
-  `flex-orch serve` and uvicorn use `--factory`.
-- Plugin routers are mounted at **`/ext/<plugin>/…`**, with the auth, tenant and audit dependencies applied **to the
-  whole router** (`app.include_router(router, prefix=..., dependencies=[Depends(authenticated_tenant)])`). **A plugin
-  route can't be unauthenticated by accident.** Core prefixes (`/studies`, `/jobs`, `/commands`, `/health`,
-  `/ready`, `/ext`) are reserved, and a collision fails at startup.
-- **Request dependencies** in `flex_orchestrator.server.deps`, the same ones the core routes use:
-  - `get_orchestrator` (the tenant's orchestrator, or the subclass);
-  - `current_principal` (user, tenant, role);
-  - `require_role("viewer" | "editor" | "owner")`;
-  - `get_jobs` (submit or track commands from a custom route);
-  - `get_settings`.
-- Plugin routes appear in the OpenAPI schema under a tag per plugin, so the generated UI client (D16) picks them up.
+*Custom routes:* the host application's (D15, superseded; D16). The `M8` branch's prototype mounted plugin routers
+under `/ext/<plugin>/…` with authentication on the whole router and the core prefixes reserved; a host should keep
+both rules.
 
 *Isolation (D14):*
 - Plugins are code **installed in the tenant's image**. They run only inside that tenant's stack and Ray, like user
   hooks.
 - Tenants that need custom plugins get an image variant, or a pip-install layer at provisioning. Which plugins are
   enabled is set per tenant through `FLEXORCH_PLUGINS`.
-- The isolation suite also runs with a deliberately hostile sample plugin enabled.
+- The host's isolation suite should also run with a deliberately hostile sample plugin enabled.
 
 *Supporting plugin authors:*
 - `flex_orchestrator.testing` provides:
   - `memory_orchestrator()`;
-  - `run_command_in_test(...)`;
-  - (Phase 2) `make_test_app(plugins=[...])` and `token_for(role, tenant)`.
+  - `run_command_in_test(...)`.
 - A complete sample plugin lives in `examples/plugins/digester_tools/`, with its own pyproject and tests. It runs in
   CI.
 - `PLUGIN_API_VERSION` follows semver, separately from the package version, and changes are recorded in the
@@ -802,12 +789,12 @@ plugin = Plugin(
 **Built** (M4, the core part) in `flex_orchestrator.ext`, with these details settled:
 - **Commands.** `fn(orch, params, progress, **runtime)`; a command needing less may take `(orch)` or
   `(orch, params)`. `runtime` carries what JSON can't (a `build=` callable from `orch.execute_study`) and is recorded
-  only as import strings. Calls are recorded in `flexorch::commands` (one ledger per store, the Phase 1 tenant);
-  `role` and `long_running` are recorded for Phase 2. `orch.register_command()` adds one without a plugin.
+  only as import strings. Calls are recorded in `flexorch::commands` (one ledger per store);
+  `role` and `long_running` are recorded for a host application. `orch.register_command()` adds one without a plugin.
 - **Plugins.** `Orchestrator(plugins=[...])` loads the ones passed (objects or installed names) plus those in
   `FLEXORCH_PLUGINS`; `ext.create_orchestrator(...)` also builds a plugin's subclass (a plain `Orchestrator` with a
   subclass-providing plugin warns). A bare import string in `Plugin.hooks` is registered for every hook slot.
-  `routers` are kept, unmounted, until the Phase 2 server. `PLUGIN_API_VERSION` is `1.0.0`; ranges are
+  `routers` are kept, unmounted, for a host application. `PLUGIN_API_VERSION` is `1.0.0`; ranges are
   comma-separated `>=`, `>`, `<=`, `<`, `==`, `!=` clauses.
 - **Events** add `data_stored` and `fit_stored` to the list above; a listener that raises propagates (the item is
   already stored). `before_store(item)` gets a `StoreItem(kind, tag, metadata)`: it raises to refuse, or adds
@@ -818,7 +805,7 @@ plugin = Plugin(
 
 **D19 — Regression as a command (`fit_surrogate`).** Fitting surrogates from data stored in Acquirium is a
 **built-in D18 command**. So it is available in Python (`orch.fit_surrogate(...)` / `orch.run_command("fit_surrogate",
-...)`), from the CLI (`flex-orch cmd fit_surrogate`), and over HTTP (`POST /commands/fit_surrogate`, Phase 2) with
+...)`), from the CLI (`flex-orch cmd fit_surrogate`), and from a host application with
 **the same JSON parameters**. It is built on flex-pse's generic regression interface,
 `flexparameterize.regression`:
 - the `Regressor` protocol (`fit(X, y)`, `to_fit_result()`, `to_surrogate_spec(**kw)`);
@@ -920,8 +907,8 @@ GET  /tenant-a/jobs/{id} → {"status": "succeeded", "result": {"tags": ["biogas
 
 **Built** (M4) in `flex_orchestrator.fitting` and `flexpse/regression.py`, with these details settled:
 - **Selectors.** All seven kinds. The general-store ones (`ref_uris`, `streams`, `resolve`, `sparql`) need a backend with the
-  optional `StreamStore` methods (the Acquirium backend has them). `resolve` matches stream labels through SPARQL
-  (an equal label first, then labels containing every word) and falls back to Acquirium's `resolve` for a concept's
+  optional `StreamStore` methods (the Acquirium backend has them). `resolve` matches stream labels read through
+  Acquirium's query API (`query().measurement()`, no SPARQL of ours; an equal label first, then labels containing every word) and falls back to Acquirium's `resolve` for a concept's
   streams; a local server started with `exact_only=True` does no fuzzy text search, so label matching is what finds
   a historian tag. A column is named by the stream's source-local name unless `rename`d. `units` takes a Pyomo unit
   or a QUDT key and converts with pint, so it doesn't call Acquirium.
@@ -1133,8 +1120,8 @@ execution: {max_workers: 8, ray_address: null, task_timeout_s: 1800, retries: 1,
 - **Memory and threads.**
   - `max_calls` restarts workers after N tasks, to keep memory bounded.
   - `runtime_env` sets `OMP/MKL/OPENBLAS_NUM_THREADS=1`.
-- **Progress and cancellation.** The `ray.wait` loop sends progress callbacks (the CLI progress bar now, Phase 2 job
-  status later). Cancelling cancels every outstanding task.
+- **Progress and cancellation.** The `ray.wait` loop sends progress callbacks (the CLI progress bar, or a host's job
+  status). Cancelling cancels every outstanding task.
 - **Deferred:** reusing built models through a Ray actor pool, if the M5 benchmark shows build time dominates.
 - **Isolation (D14): Ray is per tenant, never shared across tenants.** Ray workers run user hook code, so a shared
   cluster would let one tenant's code see another tenant's memory, files and network.
@@ -1169,7 +1156,11 @@ execution: {max_workers: 8, ray_address: null, task_timeout_s: 1800, retries: 1,
 - **Metadata.** Result runs record the hooks the task used (`flexorch_hooks`), including the study's build hook.
   `TaskResult.seconds` gives build, solve, export and store times.
 
-**D14 — Tenancy, isolation and backups (option A: one stack per tenant).**
+**D14 — Tenancy, isolation and backups (option A: one stack per tenant).** *Handed over (2026-11-09): the host
+project builds and runs the tenant stacks, their isolation and backups. This section stays as the requirements it
+was given; the library's part is D16 (configuration from the environment, `verify` for the restore check). A working
+prototype (tenant compose, provisioning, pgBackRest backups and the restore drill, the isolation suite, a Traefik
+gateway) is on the `M8` branch.*
 
 *Tenant = a group/project.* Users belong to one or more tenants with a role (viewer, editor, owner). A solo user is a
 tenant with one member. With fewer than 100 users, that is roughly 10–50 tenant stacks, which is easy to manage.
@@ -1178,8 +1169,8 @@ tenant with one member. With fewer than 100 users, that is roughly 10–50 tenan
 
 ```
              ┌───────────────── tenant-a network (internal) ─────────────────┐
-gateway ───► │ flex-orchestrator (lib / Phase 2 API) ──► acquirium ──► PG db tenant_a (role tenant_a)
- (Phase 2)   │        │ local Ray (or per-tenant Ray cluster)   │                (shared PG cluster)
+gateway ───► │ host service (calls the library) ──► acquirium ──► PG db tenant_a (role tenant_a)
+ (host)      │        │ local Ray (or per-tenant Ray cluster)   │                (shared PG cluster)
              │        └── volume: orchestrator scratch          └── volume: acquirium data_dir
              └───────────────────────────────────────────────────────────────┘
 ```
@@ -1194,7 +1185,7 @@ gateway ───► │ flex-orchestrator (lib / Phase 2 API) ──► acquiri
 | Network | No route between tenants. Acquirium is unreachable from outside its tenant | One internal network per tenant (a Docker network, or a k8s namespace with a default-deny `NetworkPolicy`). Only the gateway can reach the orchestrator, and nothing outside can reach Acquirium or the database. The database is reachable only from tenant Acquirium containers, using their own credentials. |
 | Compute | User hook code runs only on that tenant's compute | Ray per tenant (D13). Containers run as non-root, read-only root filesystem, no Docker socket (**note:** Acquirium's compose mounts `docker.sock`; the tenant stack must not). |
 | Configs / specs / results | Everything lives in the tenant's own Acquirium | The orchestrator keeps no state shared across tenants. |
-| Identity (Phase 2) | A request is served only if its token is valid for this tenant | D15: the orchestrator checks the tenant claim and role on every request. |
+| Identity (host) | A request is served only if its token is valid for this tenant | The host service checks the tenant claim and role on every request (D15, superseded). |
 
 *Backups (Postgres is the main reason we use it):*
 - **Cluster level:** pgBackRest or WAL-G with continuous WAL archiving, which gives point-in-time recovery for every
@@ -1205,40 +1196,61 @@ gateway ───► │ flex-orchestrator (lib / Phase 2 API) ──► acquiri
 - **Restoring one tenant:** restore its database (from PITR or the dump) and its volume to the same point. Start
   Acquirium and run `sync_metadata_graph`. Run the orchestrator's `verify` command (study counts, tag uniqueness,
   sample reads).
-- **The restore is rehearsed:** a scripted restore drill into a scratch tenant is an exit criterion (M6) and is run
-  every quarter.
+- **The restore is rehearsed:** a scripted restore drill into a scratch tenant, run every quarter (the host's; the
+  `M8` branch has one).
 
 *Lifecycle:*
 - Provisioning (create the database, role, secret, volume and network, start the containers) and deprovisioning
-  (final backup, then drop) are scripted in `deploy/tenant/`. The Phase 2 control plane calls the same scripts.
+  (final backup, then drop) are scripted by the host project.
 - Idle tenant stacks can be stopped with their volumes kept, and started again on demand.
 
-### Phase 2: HTTP and integrations
+### Embedding in a host application
 
-**D15 — HTTP API and auth (no passwords in the orchestrator).**
-- **Users, passwords, SSO and memberships live in the control plane**, using an OIDC identity provider (Keycloak,
-  possibly in front of Stanford SSO, or a hosted one). The orchestrator stores **no users and no passwords**.
-- **Every request carries a JWT.** It comes from the frontend login or from a personal access token for scripts
-  (`flex-orch login`, the device-code flow). The tenant orchestrator checks:
-  - the signature against the identity provider's public keys (JWKS);
-  - `iss`, `aud` and `exp`;
-  - a `tenant` claim equal to its own `FLEXORCH_TENANT`;
-  - the `role` against the route: viewer for GET, editor for store/execute, owner for delete.
-- The gateway routes `/<tenant>/…` to that tenant's stack, and the orchestrator checks the token **again**
-  (defence in depth). It never trusts headers set by the gateway alone.
-- The library client for a deployed tenant is `Orchestrator(url="https://flex.example.org/tenant-a",
-  token=...)`, or the token is read from `FLEXORCH_TOKEN`.
-- When the orchestrator runs with no control plane (a single lab server), it falls back to static hashed API tokens in
-  `FLEXORCH_API_TOKENS`. There is still no password store.
+**D15 — HTTP API and auth: superseded (2026-11-09).** The HTTP service, users, tokens and roles belong to the host
+project. What carries over as a requirement on it: the orchestrator stores no users and no passwords; identities,
+certificates and secrets are the host's to govern; every request is checked for its tenant and role before the
+library is called (viewer reads, editor stores and executes, owner deletes). The `M8` branch has a FastAPI prototype
+(routes, JWT and static-token checks, a job queue, progress as Server-Sent Events, plugin routers) the host can lift.
 
-**D16 — Control plane contract.** The multi-user control plane and UI are **separate projects**. This repo provides
-what they need:
-- a container image;
-- `deploy/tenant/` provisioning and backup scripts;
-- an env contract (`FLEXORCH_TENANT`, `FLEXORCH_OIDC_ISSUER`, `FLEXORCH_OIDC_AUDIENCE`, `FLEXORCH_ACQUIRIUM_URL`,
-  `FLEXORCH_RAY_ADDRESS`);
-- `/health` and `/ready` endpoints;
-- an OpenAPI schema, from which a UI client is generated.
+**D16 — Host application contract.** What a host application (a web service, a desktop app, a job runner) gets from
+the library, so it never needs to reach inside it:
+- **The Python API** (§4) and the **published JSON Schemas** (`docs/schemas/`: study config, fit parameters, spec,
+  dataset, result), from which a host builds its request bodies and its UI's types. Results and datasets travel as
+  their D17 files (`export_result`, `load_result`).
+- **Commands with progress and cancellation** (D18 `Progress`): a host runs `execute_study`, `fit_surrogate` or a
+  plugin's command on its own worker and reads progress from the callback. Plugin `routers` (D18) are kept, unmounted,
+  for a host that wants to mount them.
+- **Configuration from the environment**, so a container needs no code to find its store:
+  - `FLEXORCH_ACQUIRIUM_URL`: `Orchestrator()` with no store argument connects to that Acquirium (mode 3). An explicit
+    argument wins; without either, mode 1 as now.
+  - `FLEXORCH_RAY_ADDRESS`, `FLEXORCH_PLUGINS`, `FLEXORCH_USER` (who ran a run), and the D11 database settings
+    (`FLEXORCH_DB_USER`, `FLEXORCH_DB_PASSWORD_FILE`).
+  - `FLEXORCH_START_ACQUIRIUM=0`: never start a short-lived managed Acquirium; fail instead (a host that must use the
+    long-lived one).
+- **A long-lived local Acquirium**, for drivers and data processing that must keep running between scripts:
+  `flex-orch acquirium start | status | stop [--config acquirium.toml] [--port N]` runs `acquirium server` detached
+  on loopback (its own config, so its drivers) and records it in `<data_dir>/flexorch-service.json`. While it runs,
+  `Orchestrator(data_dir=...)` and every script attach to it and never stop it; a recorded server counts only if its
+  loopback `/health` answers. Only Acquirium's public interfaces are used (no private flags). Open: on Windows,
+  `stop` doesn't end processes a driver started.
+- **Thread safety**, since a service calls the library from many threads: every backend is safe to share between
+  threads (the memory backend gets a lock; the Acquirium and file backends are checked). `select_study`,
+  `create_study` and `get_or_create_study` still select the study on the orchestrator (scripts are unchanged), and
+  now also **return a handle**: a light copy fixed to that study, sharing the connection. A service uses only the
+  handle, so one caller's selection never leaks into another's. One `execute_study` at a time per process (Ray is
+  per process); a host queues the rest.
+- **Spec files as bytes:** `store_model_spec(tag, spec, files={"tariff.csv": b"..."})` resolves the spec's file
+  references against the given bytes instead of a folder, and stores them exactly as files read from disk would be
+  (`assets/<sha256[:12]>-<name>`, the same `spec_hash`). The reverse is the existing reader with an option,
+  `model_spec(tag, with_files=True)` (surrogate specs have no files): the record with its files' bytes by name, as
+  `materialize_spec` writes them but without a folder. So a host uploads and downloads a spec with its files without
+  a scratch folder.
+- **`flex-orch verify`** (`flex_orchestrator.verify`), the check after a restore or a migration: per study and kind,
+  run counts by status, the tags, and hashes of a sample of values; problems (a tag stored twice, runs left
+  `running`, values that can't be read); it prints the report as JSON to save, and `--against REPORT` exits 1 on
+  any difference. Run ids aren't compared, so a copy (an import, a move) matches its original.
+- **Not here:** routes, authentication, a client for a remote service, tenant stacks, backups, the gateway, a
+  container image. The host owns them.
 
 ---
 
@@ -1291,25 +1303,17 @@ src/flex_orchestrator/
     plugins.py           # Plugin, entry-point discovery, FLEXORCH_PLUGINS allowlist, api_version check, collisions
     events.py            # lifecycle events + subscription
   schemas.py             # the JSON Schemas published in docs/schemas/
-  testing/               # D18 helpers for plugin authors (memory_orchestrator, run_command_in_test; Phase 2: make_test_app, token_for)
-  ops/
-    verify.py            # post-restore / health verification of a tenant store
-  cli.py                 # flex-orch run | cmd <name> | commands | export | import  (built, M3/M4); ls | query | verify later; Phase 2 adds serve, login
-  server/                # Phase 2 only
-    app.py               # create_app(settings, plugins) factory — no module-level app
-    deps.py              # get_orchestrator, current_principal, require_role, get_jobs, get_settings (public for plugins)
-    extensions.py        # mounts plugin routers under /ext/<plugin> with auth dependencies, reserved prefixes, /commands/{name}
-    auth.py  jobs.py  routes/
+  testing/               # D18 helpers for plugin authors (memory_orchestrator, run_command_in_test)
+  service.py             # D16: the long-lived local Acquirium (start, find, stop, status)  (M6)
+  verify.py              # D16: the store's report after a restore or migration, and comparing reports  (M6)
+  cli.py                 # flex-orch run | cmd | commands | export | import (built, M3/M4); acquirium | verify (M6)
 deploy/
-  docker/                # image (Phase 1, M6)
-  tenant/                # provision / deprovision / backup / restore scripts + compose template (M6)
   ray/                   # per-tenant Ray cluster template (M5)
-  gateway/               # Phase 2 reference gateway config (M8)
 ```
 
 Layering rules, enforced with import-linter:
-- **Nothing outside `server/` imports `server/`, FastAPI or JWT libraries.** The core library has no HTTP in it.
-  `ext/` holds plugin `routers` without touching them; only `server/extensions.py` imports and mounts them.
+- **No HTTP framework, JWT library or web server in the library.** Plugin `routers` (D18) are held without being
+  imported or mounted; a host application mounts them.
 - `export.walker` depends only on pyomo.
 - `specs`, `study.config` and `hooks` don't import pyomo, Acquirium or flex-pse.
 - `flexpse/` is the only package that imports flex-pse.
@@ -1402,24 +1406,22 @@ on_existing: error                       # error | skip (resume) | replace (writ
 execution: {max_workers: 8, task_timeout_s: 1800, retries: 1, on_error: continue}
 ```
 
-Phase 2, the HTTP API (every route needs a valid tenant JWT, D15):
+For a host application (D16, M6):
 
-| Method | Path | Min role | Purpose |
-|---|---|---|---|
-| GET/POST | `/studies`, `/studies/{s}` | viewer / editor | list / create (409 if it exists) |
-| POST | `/studies/{s}/execute` | editor | submit StudyConfig → `202 {job_id}` |
-| GET | `/jobs/{id}` · DELETE `/jobs/{id}` | viewer · editor | status, progress, errors · cancel |
-| GET | `/studies/{s}/results` | viewer | all model results as JSON: `{tag: {metadata, units, index, columns: {key: [...]}}}` (`?tags=`, `?keys=`) |
-| GET/POST | `/studies/{s}/specs/{kind}/{tag}` | viewer / editor | read / store specs (409 on duplicate) |
-| POST | `/studies/{s}/data/{name}` · GET | editor · viewer | upload / read datasets |
-| DELETE | `/studies/{s}/{kind}/{tag}` | owner | delete (D9) |
-| GET | `/studies/{s}/export` · `/studies/{s}/results/{tag}/export` | viewer | the D17 export as a zip download · one result JSON |
-| POST | `/studies/import` | editor | upload a D17 export zip → `202 {job_id}` |
-| POST | `/studies/{s}/surrogates/fit` | editor | alias of `POST /commands/fit_surrogate` for that study (D19); the same code path |
-| GET | `/commands` | viewer | list available commands (built-in + enabled plugins) and their parameter schemas |
-| POST | `/commands/{name}` | the command's `role` | run a command (D18): long-running → `202 {job_id}`, otherwise the result |
-| * | `/ext/<plugin>/…` | set by the plugin (auth always applies) | plugin routers (D18) |
-| GET | `/health`, `/ready` | none | liveness, plus Acquirium connectivity |
+```python
+orch = Orchestrator()                                   # FLEXORCH_ACQUIRIUM_URL set: that Acquirium (mode 3)
+mine = orch.select_study("example_a")                   # per caller: a handle fixed to the study, the shared connection
+mine.store_model_spec("base_model", spec, files={"tariff.csv": tariff_bytes})   # spec files as bytes
+mine.model_spec("base_model", with_files=True).files     # {"tariff.csv": b"..."}
+```
+
+```bash
+flex-orch acquirium start --config acquirium.toml       # a long-lived Acquirium; scripts attach to it
+flex-orch verify > before.json                          # a report of the store; after a restore:
+flex-orch verify --against before.json                  # exits 1 on any difference
+```
+
+The HTTP routes the host service exposes are its own; the `M8` branch's prototype maps them 1:1 onto these calls.
 
 ---
 
@@ -1443,14 +1445,14 @@ times a month-long nested sweep in-process against Ray. `examples/plugins/ro_too
 ### Phase 1: core library
 
 #### M0 — Repo scaffold, environments, test harness (≈ 1 wk)
-- `pyproject.toml` (hatchling; extras `flexpse`, `pandas`, `dev`; the `server` extra is added in M7), src layout,
+- `pyproject.toml` (hatchling; extras `flexpse`, `pandas`, `dev`), src layout,
   README, CHANGELOG.
 - `environment-dev.yml` / `environment.yml` (**drafted**, see §6).
 - pytest setup (§7): tier markers, shared fixtures, coverage configuration.
 - Code style per D20:
   - `[tool.black]` / `[tool.ruff]` in `pyproject.toml`;
-  - `.pre-commit-config.yaml` running black, ruff and import-linter, plus the pre-push suite (import-linter includes
-    the rule that nothing imports `server/`);
+  - `.pre-commit-config.yaml` running black, ruff and import-linter, plus the pre-push suite (import-linter keeps
+    the layering rules of §3);
   - `.vscode/settings.json`;
   - `CONTRIBUTING.md` with the "run it before submitting" rule from flex-pse.
 - GitHub Actions: `lint` (`ruff check .`, `black --check .`, `lint-imports`) → unit (3.11–3.13, ubuntu + windows) →
@@ -1675,70 +1677,61 @@ D21.
   - `examples/ro_study/model_inputs.py`: the optimized schedule costs $1,296.47; the one the plant ran (June's
     stored permeate) $2,580.02.
 
-#### M6 — Single-tenant deployment and backups (≈ 2 wks)
-- **Image** (`deploy/docker/`): micromamba plus `environment.yml` plus `idaes get-extensions`. Runs as non-root.
-  It is used for the orchestrator and the Ray nodes.
-- **Tenant template** (`deploy/tenant/`): a compose template for one tenant stack (orchestrator container, Acquirium
-  container, per-tenant network and volumes) pointing at a shared Postgres cluster. There is no `docker.sock`
-  mount, and secrets come from secret files. A shared `compose.cluster.yaml` for the Postgres cluster plus its backup
-  agent.
-- **Provisioning scripts:** `provision_tenant.sh <name>` and `deprovision_tenant.sh <name>`:
-  - create the database and role, `REVOKE ... FROM PUBLIC`, and create the extension as admin;
-  - generate a random secret;
-  - create the volume and network;
-  - start the stack.
-  Deprovisioning takes a final backup before dropping anything.
-- **Backups:**
-  - pgBackRest (or WAL-G) for the cluster, with WAL archiving;
-  - a nightly `pg_dump` per tenant;
-  - per-tenant volume snapshots, with the Oxigraph export taken at the same point;
-  - `restore_tenant.sh <name> <timestamp>`, and `flex-orch verify`.
+#### M6 — Ready to embed, and `0.1.0` (≈ 1.5 wks)
+Redefined 2026-11-09: the tenant stacks, backups and the image moved to the host project (D14, D16); this is what the
+library needs for a host to embed it. Items 1, 2 and 4 are ported from the `M8` branch (built and tested there); 3
+and 5 are new.
+1. **Long-lived Acquirium** (D16): `flex_orchestrator.service` and `flex-orch acquirium start | status | stop`;
+   `Orchestrator(data_dir=)` attaches to a running one and never stops it; `FLEXORCH_START_ACQUIRIUM=0`.
+2. **Configuration from the environment** (D16): `FLEXORCH_ACQUIRIUM_URL` for mode 3 when no store is given, its
+   precedence below explicit arguments, and the variables listed together in the docs.
+3. **Thread safety** (D16): a lock in the memory backend; `select_study`, `create_study` and `get_or_create_study`
+   return a study handle; and a check that the Acquirium and file backends are safe to share.
+4. **`flex-orch verify`** (D16): `flex_orchestrator.verify`, the report and `--against`.
+5. **Spec files as bytes** (D16): `store_model_spec(..., files=)` and `model_spec(tag, with_files=True)`.
+6. **Release `0.1.0`**: the version, the changelog, a tag. Acquirium stays pinned to a `main` SHA, not PyPI (see
+   the upstream track).
 - **Exit:**
-  - Two tenants provisioned on one cluster pass the **isolation suite** (§7): database, network, volume and secret.
-  - **Restore drill:** tenant A is deleted, then restored to a scratch tenant at a chosen point in time, and
-    `verify` passes with the same studies, tags and sample values.
-  - Scripts 1–3 run inside a tenant stack, in mode 3.
-  - `0.1.0` (the library) is released.
+  - A script started twice in a row against `flex-orch acquirium start` attaches both times, the server outlives
+    both, and `stop` ends it (integration test on a real Acquirium); with `FLEXORCH_START_ACQUIRIUM=0` and none
+    running, `Orchestrator(data_dir=)` raises instead of starting one.
+  - `Orchestrator()` in a process with only `FLEXORCH_ACQUIRIUM_URL` set reaches that Acquirium in mode 3 and
+    reads what another script stored there.
+  - Threads storing and reading in different studies through the handles `select_study` returns (memory, files,
+    Acquirium) never see each other's selection, and the stored results match a serial run.
+  - `verify` on a study, exported and imported under a new name, matches its `--against` report apart from the name;
+    a run left `running` and a duplicated tag are reported.
+  - A spec with a tariff file stored from bytes has the same `spec_hash` and assets as stored from disk, and
+    `model_spec(tag, with_files=True)` gives the same bytes back.
+  - `0.1.0` is tagged.
+- **Status: built (2026-11-09), apart from the release** (item 6: the version bump, the tag and the Acquirium PyPI
+  pin wait for a decision).
+  - **Long-lived Acquirium** (`service.py`, `flex-orch acquirium`): ported from `M8`.
+    `tests/test_service.py`: attaching, `FLEXORCH_START_ACQUIRIUM`, loopback-only discovery, the CLI; and an
+    integration test on a real Acquirium where two scripts attach and leave it running, a third with only
+    `FLEXORCH_ACQUIRIUM_URL` reaches it in mode 3, and with it stopped and starting forbidden a script fails.
+  - **Environment** (`FLEXORCH_ACQUIRIUM_URL`, its precedence): `tests/test_connection.py`.
+  - **Study handles and threads**: `select_study`, `create_study` and `get_or_create_study` return a shallow copy
+    fixed to the study (`_study_handle`), sharing the backend, connection, plugins and per-study locks; closing one
+    does nothing; `orch.user` is recorded as `flexorch_user`. The memory backend locks every method; the file
+    backend's reads that walk its index now take its lock too (a run started in another thread could break
+    `runs()`). `tests/test_embedding.py`: four threads storing through handles while the shared orchestrator's
+    selection changes under them land in their own studies, with the same value hashes as a serial run, on memory,
+    files and Acquirium.
+  - **`verify`**: ported from `M8`, with one fix found by the import test: `compare` compared run ids, so any
+    imported or moved copy looked changed. `tests/test_verify.py` adds a study exported and imported under a new
+    name matching its original.
+  - **Spec files as bytes**: `collect_assets(..., given=)` and `SpecRecordWithFiles` (its `files` aren't in the
+    record's JSON). With `files=`, nothing is read from disk, so a spec from elsewhere can't make the library read
+    the host's files; unreferenced bytes are refused; bytes under a stored name whose hash matches keep it, so a
+    spec read back with its files stores again unchanged. `tests/test_spec_storage.py`.
 
-### Phase 2: HTTP and integrations
+**Dropped from this repo (2026-11-09):** M7 (HTTP API, auth, the extensible app) and M8 (multi-tenant integration:
+the gateway, OpenAPI export, progress streaming, CORS, idle tenants). The host project owns them. The `M8` branch has
+working prototypes of both (and of the old M6 tenant stack, backups and restore drill), with their Docker test suites,
+for the host project to lift.
 
-#### M7 — HTTP API, auth, and extensible app (≈ 2.5–3 wks)
-- `server/`: a FastAPI app factory and the §4 routes:
-  - a job queue (one runner per tenant; it runs `execute_study` on the tenant's Ray);
-  - results JSON with pagination;
-  - 409 on duplicates, 202 plus a job id for anything long.
-- `auth.py` (D15): JWT checks against JWKS, the tenant claim and role per route; the static-token fallback.
-  `Orchestrator(url=, token=)` client mode, and `flex-orch serve` / `flex-orch login`.
-- **Extension API, HTTP part (D18):**
-  - the `create_app(settings, plugins)` factory (uvicorn `--factory`, no module-level app);
-  - the public `server/deps.py`;
-  - `server/extensions.py`, which mounts plugin routers under `/ext/<plugin>` with auth, tenant and audit dependencies
-    on the router, reserves the core prefixes, checks for collisions and adds an OpenAPI tag per plugin;
-  - `GET /commands` and `POST /commands/{name}`, on the same job path as `/execute`;
-  - `make_test_app` and `token_for` in `flex_orchestrator.testing`;
-  - the sample plugin gains a router.
-- **Exit:**
-  - Script 4 runs against one tenant stack with a test identity provider (a Keycloak container).
-  - A token for tenant B is refused by tenant A (403).
-  - A viewer token can't execute, and an editor token can't delete.
-  - `POST /commands/fit_surrogate` and the `/studies/{s}/surrogates/fit` alias store **the same** specs and fit
-    runs as the Python call with the same parameters.
-  - The sample plugin's route and command work over HTTP with an editor token. With no token, or a token for the
-    wrong tenant, they return 401/403.
-  - A plugin that claims a reserved prefix fails at startup.
-
-#### M8 — Multi-tenant integration (≈ 1.5–2 wks)
-- The control plane contract (D16): the env contract, health and ready endpoints, OpenAPI export, and a generated
-  TypeScript/Python client for the UI. A reference gateway config (Traefik or Envoy) routing `/<tenant>/` and
-  enforcing TLS.
-- Progress streaming for the UI (Server-Sent Events on `/jobs/{id}/events`). CORS limited to the UI's origin.
-- Starting and stopping idle tenants on demand through the provisioning scripts.
-- **Exit:**
-  - The full isolation suite, including the auth layer, passes against 3 tenants behind the gateway.
-  - A UI-like client (a generated SDK test) runs scripts 3 and 4.
-  - The docs cover how an operator adds a tenant, a user and a backup.
-
-#### Upstream track (runs alongside both phases)
+#### Upstream track
 - ~~**U1 (flex-pse):** `emit_model(m)`~~ — done in flex-pse 0.2.
 - ~~**U2 (flex-pse):** surrogates per relation~~ — done in 0.2 (`surrogate` elements name their relation).
 - **U8 (flex-pse):** upstream the ARIMA regressor from `arima_integration` (`ArimaRegressor`, `get_regressor("arima")`,
@@ -1787,9 +1780,11 @@ D21.
 - **U6 (Acquirium):** a "no DDL" startup mode, so the runtime role only needs read/write access.
 - **U7 (Acquirium):** a consistent online backup for Oxigraph (`Store.backup()`) and the artifacts directory, e.g. a
   `POST /admin/backup` endpoint, or storing artifacts in Postgres or S3.
-- Keep track of the PR #78 merge and release, then move the pin from a git SHA to a PyPI version.
+- PR #78 is merged (as `227e3f6`, 2026-10-26). Both environments pin Acquirium `main` at `b7f6fc8` (2026-11-09,
+  the `v0.4.0a9` release commit); PyPI has only `0.3.1`. We track `main` by SHA rather than a PyPI release: move the
+  SHA forward on purpose and rerun the suite.
 
-Rough total: **Phase 1 ≈ 14–16 weeks; Phase 2 ≈ 4–5 weeks** (one developer).
+Rough total: **≈ 14–16 weeks** for M0–M6 (one developer); M6 as redefined is about 1.5 weeks of it.
 
 ---
 
@@ -1797,7 +1792,7 @@ Rough total: **Phase 1 ≈ 14–16 weeks; Phase 2 ≈ 4–5 weeks** (one develop
 
 | File | Env name | Purpose |
 |---|---|---|
-| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.3.0** from git (upstream `flex-pse/flex-pse`, commit `809b25b`), Acquirium from git at the same commit as `environment.yml` (`DataDrivenCPS/acquirium@227e3f6`, on `main`; never a local checkout), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
+| `environment-dev.yml` | `flex-orch-dev` | flex-pse **v0.3.0** from git (upstream `flex-pse/flex-pse`, commit `809b25b`), Acquirium from git at the same commit as `environment.yml` (`DataDrivenCPS/acquirium@b7f6fc8`, on `main`; never a local checkout), this package (`-e .[dev]`), plus test and lint tooling. **Created and verified**: everything imports and `pip check` is clean. To co-develop flex-pse, swap the git line for `-e ../flex-pse[...]` locally. |
 | `environment.yml` | `flex-orch` | Deployment. flex-pse and Acquirium are pinned to **exact git SHAs**. Used by the M6 image. |
 
 ```bash
@@ -1834,9 +1829,9 @@ find and review. This differs from flex-pse on purpose.
 - `component`: an embedded Acquirium in `tmp_path` plus HiGHS/IPOPT on tiny models, a local Ray (`num_cpus=2`), and
   a Timescale container for the mode 2 tests. Marked `needs_highs`, `needs_ipopt`, `needs_docker` and skipped when
   those aren't available.
-- `integration`: tenant stacks from `deploy/tenant/` on a shared Postgres cluster, the example scripts, a multi-node
-  Ray run, the **isolation suite**, and the **restore drill**. Phase 2 adds the server, gateway and identity
-  provider.
+- `integration`: the example scripts, a real Acquirium (the long-lived one included, M6), mode 2 on TimescaleDB,
+  and a multi-node Ray run. The tenant stacks' isolation suite and restore drill are the host project's (the `M8`
+  branch has both).
 - `benchmark` (opt-in): the D5 and M5 load tests.
 
 **Shared fixtures (the repo-root `conftest.py`, plus a `conftest.py` in a package's `tests/` for fixtures only it uses)**
@@ -1873,7 +1868,6 @@ find and review. This differs from flex-pse on purpose.
 that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` in 0.2) still raises
 `NotImplementedError`. When a pin bump implements one, the tripwire fails, and that PR moves the type into
 `surrogate_case` (with a regressor and data) and into the docs.
-- `two_tenants` (integration): provisions tenants A and B with `deploy/tenant/`, and tears them down afterwards.
 
 **What each area tests**
 
@@ -1887,7 +1881,7 @@ that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` i
 | Round-trip | export → store → read back: values and units are equal, for both frame kinds. |
 | Connection / credentials (D11) | mode selection and conflicting arguments; DSN escaping (`@:/%` in passwords); precedence between `*_FILE`, `FLEXORCH_*`, `PG*` and `.pgpass`; the DSN reaches the child process only through the environment, and the toml contains no `pg_dsn`; a **redaction test** that searches logs, exceptions, `server.log` and metadata for the password; a wrong password → `DBAuthError`; preflight failures; a second managed server is refused; `recreate` is rejected. |
 | Study export/import (D17) | the folder layout matches the study (one file per dataset, spec and result tag); every file validates against the published JSON Schema; result files keep `component`/`index`/`unit`/`pyomo_unit` for time-only, time × custom, scalar and custom-indexed values from the flex-pse fixture models; timestamps keep their timezone, and floats read back exactly; stale values and NaN → `null` plus the `stale` list; non-string raw indices round-trip; **export → import → export gives identical files** (apart from provenance fields); `load_result` frames equal the frames read from the database; checksum tampering and an unknown schema version are both rejected on import; import into an existing study → `StudyExistsError`, and an existing tag → `TagExistsError`; a crash part-way through leaves no partial folder; refuses a non-empty target unless `overwrite`; **no secrets or DSNs in any exported file** (scanned); gzip round-trip; memory stays bounded on a large study (benchmark tier). |
-| Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. **Server (Phase 2):** every route under `/ext/<plugin>` returns 401 with no token and 403 with another tenant's token, **checked by walking every route the app registers**, so a new plugin route can't escape the check; the role in `@command(role=...)` is enforced on `/commands/{name}`; reserved prefixes are protected; plugin OpenAPI tags appear in the generated client; `create_app` is pure (two apps with different plugins don't affect each other); the isolation suite passes with a hostile plugin enabled. |
+| Extension API (D18) | **Core:** `@command` parameter checking; Python and CLI calls give the same result; each call is recorded in the command ledger; `Progress` and cancellation; a long-running command goes through the job path, and Ray dispatch works from a command; `execute_study` behaves the same as a built-in command; name collisions fail at startup; entry-point discovery; **unlisted plugins don't load**; `api_version` mismatch → a clear error; two subclasses → a startup error; subclass overrides (`before_store` rejecting an item, `default_export_selection`); lifecycle events fire in order; the sample plugin's own test suite passes using `flex_orchestrator.testing`. |
 | Regression (D19) | **Selectors:** each of the six kinds resolves to the expected stream references and window; a dataset in another study of the same tenant; `result` selectors on exported model keys; an ambiguous `resolve` fails; SPARQL that writes is rejected; unit conversion to `units`. **Preparation:** inner and outer alignment, timezone normalisation, resampling, `gaps=error` refuses gappy data, `interpolate` with `limit`, `longest_segment`, the `max_rows` guard. **Fitting:** `multilinear` and `constant_intensity` through `get_regressor` (the 0.2 types; the matrix grows with the pin); a reserved type gives a clear error naming the flex-pse version; QUDT to Pyomo conversion of column units, and an unmappable unit is an error; the hook's holdout metrics match a hand computation; a custom import-string regressor following the protocol; a regressor that doesn't follow the protocol → a clear error; tag templates over `variants`; `TagExistsError` / `on_existing`; holdout validation only when `predict` exists. **Provenance:** the data hash is stable across re-runs and changes when the data changes; resolved references are recorded; the spec links to its fit run; `fits/` round-trips through the D17 export. **Integration:** `fits:` then `sweeps` in one config; the same results with `max_workers=1` and `N`; Python, CLI and HTTP all store identical specs. Uses the flex-pse fixtures and synthetic linear data with known coefficients (ARMA data is added with U8). |
 | Hooks (D1) | callable, registered-name and import-string resolution; a bad import string gives a clear error; `SolveOutcome` failure handling. |
 | Specs (D2) | canonical hashing ignores key order and `1` vs `1.0`, and sees values and list order; a **pinned hash** guards the canonical form; `run_hash` over overrides; non-JSON values (sets, NaN, infinity) rejected; format detection; validators skipped when their library is missing; dict and pydantic forms store identical normalised JSON; normalisation is idempotent; kind/format mismatch rejected; tag rules; `SpecRecord` JSON round trip and `verify()` tamper check; a stored, normalised spec replays through `build`. |
@@ -1895,9 +1889,7 @@ that each reserved type (`quadratic`, `exponential`, `arima`, `neural_network` i
 | Acquirium access (D8) | `orch.acquirium` is the Acquirium backend's client; the memory backend raises `StorageError`. |
 | Study config | schema validation, sweep expansion (product and zip), `output_name`, dry-run, resume. |
 | Parallel (D13) | `run_task` on its own (unit); Ray component tests: `TaskSpec` serialisation, a `__main__` hook rejected, a hung task killed at its timeout, retries, `on_error`, cancellation, `max_calls` restarts, thread env vars set, uniqueness with many tasks, **the same results with `max_workers=1` and `N`**. A multi-node per-tenant Ray integration test. |
-| **Isolation suite (D14)** | With tenants A and B: **(DB)** B's role can't `CONNECT` to A's database, and can't create databases or roles; **(secret)** A's secret file isn't mounted in B's containers, and isn't readable inside the orchestrator container; **(network)** B's orchestrator and Ray can't resolve or reach A's Acquirium, orchestrator or Ray, and nothing outside can reach either Acquirium; **(volume)** A's `data_dir` isn't mounted anywhere in B; **(compute)** a malicious hook in B (it tries to open A's hostnames and ports, read `/var/run/docker.sock`, and list mounts) finds nothing of A's; **(data)** a study and spec written in A are invisible from every B API; containers are non-root. Phase 2 adds the **(auth)** cases: B's token gets 403 on every A route; no token gets 401; an expired or bad-signature token gets 401; role checks per route; forged gateway headers are ignored. |
-| **Backup / restore** | drill: write known data into A → back up → destroy A → restore to a point in time in a scratch tenant → `verify` matches the studies, tags, a timeseries sample, the graph metadata and the file artifacts; a per-tenant `pg_dump` restore; a deprovision takes its final backup before dropping. |
-| Server (Phase 2) | FastAPI `TestClient`: auth and roles, 409 on duplicates, job lifecycle and cancel, results JSON shape (golden files), SSE progress, OpenAPI schema snapshot. |
+| Host contract (D16, M6) | The long-lived Acquirium: start, attach twice, outlive both scripts, stop; a stale record ignored; `FLEXORCH_START_ACQUIRIUM=0` refusing to start one. `FLEXORCH_ACQUIRIUM_URL` and its precedence. Threads through study handles on every backend. `verify` reports and `--against`. Spec files from bytes matching files from disk. |
 | Examples | every `examples/*.py` runs as an `integration` test. |
 | Docs (§8) | the `flexorchdoc` table functions are unit-tested without Sphinx (field tables match the pydantic models, the env table matches `Settings`); `sphinx-build -W --keep-going` runs in CI; the scripts embedded on doc pages are the ones the integration tests run. |
 
@@ -1935,9 +1927,8 @@ docs/
     model_data_export_and_units.md        # D3: time-set detection, keys, indexing, QUDT units  (M2)
     export_format.md                      # D17: folder layout, flexorch-export/1 schema        (M3)
     parallel_execution.md                 # D13: Ray, task model, main-process writes           (M5)
-    tenancy_isolation_and_backups.md      # D14: per-tenant stacks, guarantees, backups         (M6)
-    auth_and_http_api.md                  # D15/D16: tokens, roles, control plane contract      (M7)
-    extending_the_orchestrator.md         # D18: commands vs plugins vs subclassing vs routes   (M4, Phase 2 part in M7)
+    embedding_in_a_host_application.md    # D16: the contract, threads, environment, what the host owns (M6)
+    extending_the_orchestrator.md         # D18: commands vs plugins vs subclassing             (M4)
   how_to/
     connect_to_postgres.md                (M1)
     store_and_retrieve_data.md            (M1)
@@ -1947,15 +1938,12 @@ docs/
     export_and_import_a_study.md          (M3)
     run_a_study_from_config.md            (M4)
     run_sweeps_in_parallel_with_ray.md    (M5)
-    fit_a_surrogate_from_acquirium_data.md (M4; HTTP example added in M7)
+    fit_a_surrogate_from_acquirium_data.md (M4)
     write_a_custom_command.md             (M4)
-    write_and_ship_a_plugin.md            (M4; routes added in M7)
+    write_and_ship_a_plugin.md            (M4)
     subclass_the_orchestrator.md          (M4)
-    add_custom_http_routes.md             (M7)
-    provision_a_tenant.md                 (M6)
-    back_up_and_restore_a_tenant.md       (M6)
-    call_the_http_api.md                  (M7)
-    integrate_with_the_control_plane_and_ui.md  (M8)
+    run_a_long_lived_acquirium.md         (M6)
+    verify_a_store_after_a_restore.md     (M6)
   examples/
     index.md                     # embeds examples/*.py with literalinclude; these are the same scripts the
                                  #   integration tests run, so the docs can't drift from working code
@@ -1970,9 +1958,7 @@ docs/
     flex_orchestrator/ext.rst    # @command, Plugin, events, stable subclass methods, PLUGIN_API_VERSION
     flex_orchestrator/fitting.rst# fit_surrogate parameters, selector and prep tables (generated from pydantic)
     flex_orchestrator/testing.rst# helpers for plugin authors
-    flex_orchestrator/server_deps.rst # Phase 2: create_app, deps for plugin routes
     cli.rst                      # flex-orch commands (generated from --help)
-    http_api.rst                 # Phase 2: OpenAPI-generated route reference
     glossary.md                  # study, tag, spec, run, snapshot, tenant, time set, …
 ```
 
@@ -1985,7 +1971,6 @@ small):
   used for `StudyConfig`, the `execution` and `export` blocks, every `flexorch-export/1` file model, and `Settings`.
 - `.. flexorch-env-table::` lists every `FLEXORCH_*` env var and secret file, with its source and precedence.
 - `.. flexorch-cli::` includes the `--help` output of each CLI command.
-- Phase 2 adds `.. flexorch-openapi::`, which renders the route reference from the app's generated OpenAPI schema.
 - The JSON Schemas in `docs/schemas/` are written by the same code and linked from `export_format.md`.
 - The table-building functions don't depend on Sphinx, so unit tests call them directly, as flex-pse's
   `test_flexdoc_tables.py` does.
@@ -2010,14 +1995,12 @@ small):
 - **Code style:** black and ruff exactly as in flex-pse (D20). Install the hooks once with
   `pre-commit install --hook-type pre-commit --hook-type pre-push`. Never use `--no-verify` to get a commit through.
   PRs that only reformat stay separate from PRs that change behaviour.
-- **Security review:** any PR that touches `connection.py`, `deploy/tenant/` or `server/auth.py` needs
-  a second reviewer, and must keep the isolation suite and the redaction test passing.
-- **Extension API changes:** any change to `ext/`, `testing/` or `server/deps.py` updates `PLUGIN_API_VERSION`
+- **Security review:** any PR that touches `connection.py` or `service.py` needs a second reviewer, and must keep
+  the redaction test passing.
+- **Extension API changes:** any change to `ext/` or `testing/` updates `PLUGIN_API_VERSION`
   (a breaking change bumps the major version) and records it in the changelog. The sample plugin must keep passing.
-- **Versioning:** SemVer. `0.1.0` at the end of Phase 1, `0.2.0` at the end of Phase 2. Every stored run records the
-  package versions and hook names.
-- **Operations:** the restore drill runs every quarter against a scratch tenant. Tenant database secrets are rotated
-  by re-provisioning.
+- **Versioning:** SemVer. `0.1.0` at the end of M6; changes to the D16 contract are recorded in the changelog.
+  Every stored run records the package versions and hook names.
 - **Upstream sync:** U-items are tracked as issues in their upstream repos. The pinned SHAs are checked at every
   milestone.
 - **Definition of done for a milestone:** the exit criterion is met; CI passes on Windows and Linux (unit +
@@ -2030,11 +2013,11 @@ small):
 
 | Risk | Mitigation |
 |---|---|
-| PR #78 API changes before merge | Every Acquirium call goes through `backend/acquirium.py`, and the contract tests catch drift. |
-| Data leaks between tenants | One stack per tenant (database, role, secret, volume, network, Ray), with nothing shared. The isolation suite gates M6, M7 and M8. Phase 2 checks the token's tenant claim in the orchestrator itself. |
+| Acquirium API changes on `main` (we pin a `main` SHA) | Every Acquirium call goes through `backend/acquirium.py`, and the contract tests catch drift. |
+| Data leaks between tenants | The host project's (D14 requirements, D16): one stack per tenant with nothing shared. In the library, study handles keep callers' selections apart and nothing is cached across stores. |
 | User hook code is arbitrary code | It runs only inside the tenant's own containers and Ray: non-root, no Docker socket, no route to other tenants. |
 | Shared Postgres cluster is a single point of failure | PITR backups, monitoring, and optionally a streaming replica. Per-tenant `pg_dump` for moving tenants elsewhere. |
-| Backups miss graph or artifacts (not in Postgres) | Volume snapshots plus the Oxigraph export taken with each database backup, a restore drill as an exit criterion, and U7 upstream. |
+| Backups miss graph or artifacts (not in Postgres) | Volume snapshots plus the Oxigraph export taken with each database backup, the host's restore drill, `verify` (M6), and U7 upstream. |
 | A delete can't be undone | `replace` writes before deleting; `allow_delete=False` per deployment; backups (D14) restore deleted items. |
 | Database credentials leak | Secret files only, `SecretStr`, redaction everywhere, the redaction test, and U5. |
 | Two Acquirium servers on one database | One Acquirium per tenant database by construction, plus the mode 2 server lock. |
@@ -2051,7 +2034,6 @@ small):
 | Regression on poor or ambiguous data | `gaps=error` by default, ambiguous `resolve` fails, every fit records its provenance and data hash, and holdout metrics are available where `predict` exists. |
 | Large training pulls exhaust memory | `max_rows`, windowed selectors, data loaded once and shared through `ray.put`. |
 | Regression API changes in flex-pse | Only the `Regressor` protocol and `get_regressor` are used, through `flexpse/regression.py`, and contract tests run against the pinned flex-pse. |
-| A plugin route ships without auth | Auth dependencies are attached to the router when it is mounted, reserved prefixes are enforced, and a test walks every registered route. |
-| Plugins break when the core changes | A small stable surface (commands, `Plugin`, events, the listed subclass methods, `server/deps`), versioned with `PLUGIN_API_VERSION`, and the sample plugin tested in CI. |
-| Plugin code compromises a tenant | Plugins are installed per image, enabled per tenant through the allowlist, run inside the tenant sandbox, and the isolation suite runs with a hostile plugin enabled. |
-| HTTP arriving late hides integration problems | The core API is shaped so it maps 1:1 onto the §4 routes, and hook import strings and `TaskSpec` are plain data from M4 on. M7 is mostly wiring. |
+| Plugins break when the core changes | A small stable surface (commands, `Plugin`, events, the listed subclass methods), versioned with `PLUGIN_API_VERSION`, and the sample plugin tested in CI. |
+| Plugin code compromises a tenant | Plugins are installed per image, enabled per tenant through the allowlist, run inside the tenant sandbox, and the host's isolation suite runs with a hostile plugin enabled. |
+| The host project needs something the library lacks | D16 lists the contract; the `M8` branch's prototype server was built against it, so its gaps (threads, spec files as bytes) are known and in M6. New needs go into D16 first. |

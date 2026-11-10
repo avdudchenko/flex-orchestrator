@@ -9,9 +9,10 @@ stored with it:
   the path written there. A format's finder knows where its references live
   (:func:`flexpse_assets`, which reads the JSON only and needs no flex-pse);
   any spec can also name pointers explicitly.
-- :func:`collect_assets` reads each file, and rewrites its path in the spec to
-  the stable name ``assets/<sha256[:12]>-<filename>``, so the stored spec
-  doesn't depend on where the files were.
+- :func:`collect_assets` reads each file (or takes its bytes, for a caller
+  that has them, such as a service handling an upload), and rewrites its path
+  in the spec to the stable name ``assets/<sha256[:12]>-<filename>``, so the
+  stored spec doesn't depend on where the files were.
 - :func:`materialize_spec` writes the files to a directory and points the spec
   at them, so the build hook gets ordinary paths.
 
@@ -20,6 +21,7 @@ Nothing here imports pyomo or flex-pse.
 
 import copy
 import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -151,6 +153,7 @@ def collect_assets(
     references: Mapping[str, str],
     base_dir: str | Path | None = None,
     known: Mapping[str, tuple[AssetRef, bytes]] | None = None,
+    given: Mapping[str, bytes] | None = None,
 ) -> tuple[dict[str, Any], dict[str, AssetRef], dict[str, bytes]]:
     """Read the referenced files and point the spec at their stored names.
 
@@ -162,22 +165,54 @@ def collect_assets(
         known: Assets already stored, ``{name: (ref, bytes)}``. A reference
             that is one of these names is kept as it is, so a spec derived
             from a stored one (e.g. by ``apply_surrogate``) needs no files.
+        given: The files' bytes, ``{path as the spec writes it: bytes}``,
+            instead of reading them: then **nothing is read from disk**, so a
+            spec from elsewhere can't make this process read its own files.
+            A path that is a stored name (``assets/<sha256[:12]>-<name>``)
+            whose bytes match it keeps that name, so a spec read back with its
+            files stores again unchanged. Without ``base_dir``.
 
     Returns:
         The spec with each path replaced by its stored name, ``{pointer:
         AssetRef}``, and ``{name: bytes}`` for every file.
 
     Raises:
-        SpecError: If a file can't be read; a missing file is never skipped.
+        SpecError: If a file can't be read (a missing file is never skipped),
+            or, with ``given``, a reference has no bytes or bytes are given for
+            a path the spec doesn't reference.
     """
+    if given is not None and base_dir is not None:
+        raise SpecError(
+            "Pass the files' bytes or a base_dir to read them from, not both."
+        )
     base = Path(base_dir) if base_dir is not None else Path.cwd()
     known = known or {}
     rewritten = copy.deepcopy(dict(spec))
     refs: dict[str, AssetRef] = {}
     files: dict[str, bytes] = {}
+    if given is not None:
+        unused = sorted(set(given) - set(references.values()))
+        if unused:
+            raise SpecError(
+                f"Files were given for paths the spec doesn't reference: {unused}; "
+                f"it references {sorted(set(references.values()))}."
+            )
     for pointer, path in references.items():
         if path in known:
             ref, data = known[path]
+        elif given is not None:
+            if path not in given:
+                raise SpecError(
+                    f"The spec references {path!r} at {pointer}, and no bytes were "
+                    "given for it."
+                )
+            data = bytes(given[path])
+            digest = hashlib.sha256(data).hexdigest()
+            ref = AssetRef(
+                name=_stored_name(path, digest),
+                sha256=digest,
+                size=len(data),
+            )
         else:
             full = Path(path) if Path(path).is_absolute() else base / path
             try:
@@ -203,6 +238,16 @@ def collect_assets(
         refs[pointer] = ref
         files[ref.name] = data
     return rewritten, refs, files
+
+
+def _stored_name(path: str, digest: str) -> str:
+    """The stored name for given bytes at ``path`` (see :func:`collect_assets`)."""
+    if _STORED.fullmatch(path) and path[len(ASSET_DIR) + 1 :].startswith(digest[:12]):
+        return path
+    return f"{ASSET_DIR}/{digest[:12]}-{Path(path).name}"
+
+
+_STORED = re.compile(rf"{ASSET_DIR}/[0-9a-f]{{12}}-[^/]+")
 
 
 def materialize_spec(

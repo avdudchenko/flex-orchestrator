@@ -3,17 +3,19 @@ root_packages =
     flex_orchestrator
 include_external_packages = True
 
-# PLAN.md §3 layering. The "nothing imports server/" contract is added in M7,
-# when flex_orchestrator.server exists.
+# PLAN.md §3 layering. The HTTP service is a host application's (D16), never
+# this library's.
 
 [importlinter:contract:no-http-in-core]
-name = the core library never imports HTTP frameworks
+name = the library never imports HTTP frameworks, web servers or JWT libraries
 type = forbidden
 source_modules =
     flex_orchestrator
 forbidden_modules =
     fastapi
     starlette
+    uvicorn
+    jwt
 
 [importlinter:contract:format-agnostic-core]
 name = hooks, specs, errors, testing and the config models don't import pyomo, flex-pse or Acquirium
@@ -73,6 +75,8 @@ source_modules =
     flex_orchestrator.archive
     flex_orchestrator.cli
     flex_orchestrator.parallel
+    flex_orchestrator.verify
+    flex_orchestrator.service
 forbidden_modules =
     acquirium
     requests

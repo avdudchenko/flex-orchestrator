@@ -151,3 +151,29 @@ SELECT ?ref WHERE {{ <urn:test:{key}:feed> ref:hasExternalReference ?ref }}"""
         aq_orch.fit_surrogate(
             tag="x", regressor="multilinear", X={"resolve": key}, y={"resolve": key}
         )
+
+
+def test_stream_info_names_unlabelled_and_misses_unknown_streams(
+    aq_orch, acquirium_local, historian
+):
+    key, source = historian["key"], historian["source"]
+    acquirium_local.register_streams(
+        [
+            {
+                "point_uri": f"urn:test:{key}:bare",
+                "source_id": source,
+                "ref_name": f"FT_{key}_bare",
+                "value_kind": "numeric",
+            }
+        ]
+    )
+    bare = aq_orch.backend.stream_ref(source, f"FT_{key}_bare")
+    missing = aq_orch.backend.stream_ref(source, "no_such_stream")
+    feed = historian["refs"]["feed"]
+    info = aq_orch.backend.stream_info([bare, missing, feed])
+    assert info[bare] == {"name": f"FT_{key}_bare", "label": None, "unit": None}
+    assert info[missing] == {"name": None, "label": None, "unit": None}
+    assert info[feed]["unit"] == "M3-PER-HR"
+    assert aq_orch.backend.stream_rows(missing) == []
+    rows = aq_orch.backend.stream_rows(feed)
+    assert len(rows) == 24 and all(when.tzinfo is not None for when, _ in rows)

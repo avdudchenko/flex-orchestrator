@@ -33,7 +33,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from flex_orchestrator import data as datasets
 from flex_orchestrator import frames, results, spec_store
@@ -79,6 +79,7 @@ from flex_orchestrator.results import MODEL_MANIFEST, MODEL_VALUES
 from flex_orchestrator.specs import (
     SpecKind,
     SpecRecord,
+    SpecRecordWithFiles,
     check_tag,
     is_design_spec,
     normalise_spec,
@@ -302,7 +303,10 @@ class Orchestrator:
         study: A study to select; it must exist.
         data_dir: The managed Acquirium's directory (modes 1 and 2).
         db: A Postgres URL without a password (mode 2).
-        acquirium_url: A running Acquirium (mode 3).
+        acquirium_url: A running Acquirium (mode 3). With no ``backend``,
+            ``data_dir``, ``db`` or ``acquirium_url``, ``FLEXORCH_ACQUIRIUM_URL``
+            (from ``environ``) selects mode 3: how a container or a host
+            application points the library at its Acquirium (D16).
         db_credentials: An explicit Postgres login, for developers and tests.
         hooks: Hooks that replace the flex-pse defaults, slot by slot.
         registry: Where registered hook names resolve.
@@ -319,17 +323,30 @@ class Orchestrator:
             ``FLEXORCH_PLUGINS`` load too. Use
             :func:`~flex_orchestrator.ext.create_orchestrator` to get a
             plugin's orchestrator subclass.
-        environ: Where ``FLEXORCH_PLUGINS`` and ``FLEXORCH_RAY_ADDRESS`` are
+        environ: Where ``FLEXORCH_PLUGINS``, ``FLEXORCH_RAY_ADDRESS``,
+            ``FLEXORCH_ACQUIRIUM_URL`` and ``FLEXORCH_START_ACQUIRIUM`` are
             read; ``os.environ`` by default.
         ray_address: The Ray cluster for studies with ``max_workers > 1``
             when their config names none (D13); ``FLEXORCH_RAY_ADDRESS`` if
             unset, else local Ray.
 
+    Attributes:
+        user: Who runs and stores are recorded as (``flexorch_user``); if
+            ``None``, ``FLEXORCH_USER`` or the login name. A host application
+            sets it on each caller's study handle (D16).
+
+    Selecting a study (:meth:`select_study`, :meth:`create_study`,
+    :meth:`get_or_create_study`) makes it this orchestrator's study, and also
+    returns a **study handle**: a light copy fixed to that study, sharing the
+    connection. A script keeps using the orchestrator; code that works in
+    several studies at once, or from several threads, keeps the handle.
+
     Example:
         >>> from flex_orchestrator.backend import MemoryBackend
         >>> orch = Orchestrator(MemoryBackend())
-        >>> orch.create_study("example_a")
-        'example_a'
+        >>> a = orch.create_study("example_a")
+        >>> a.study, orch.study
+        ('example_a', 'example_a')
     """
 
     def __init__(
@@ -353,12 +370,18 @@ class Orchestrator:
     ) -> None:
         """Set up the orchestrator; see the class docstring for the arguments."""
         self.connection: Connection | None = None
+        self.user: str | None = None
+        self._handle = False
+        if backend is None and all(a is None for a in (data_dir, db, acquirium_url)):
+            env = os.environ if environ is None else environ
+            acquirium_url = env.get("FLEXORCH_ACQUIRIUM_URL") or None
         if backend is None:
             self.connection = connect(
                 data_dir=data_dir,
                 db=db,
                 acquirium_url=acquirium_url,
                 db_credentials=db_credentials,
+                environ=environ,
             )
             backend = self.connection.backend()
         elif any(a is not None for a in (data_dir, db, acquirium_url, db_credentials)):
@@ -401,8 +424,11 @@ class Orchestrator:
 
         A managed server this process started is stopped; its data is kept.
         A backend that was passed in is left alone. Plugins' ``on_shutdown``
-        runs first, once.
+        runs first, once. A study handle shares the connection, so closing it
+        does nothing: close the orchestrator it came from.
         """
+        if self._handle:
+            return
         if not self._closed:
             self._closed = True
             for plugin in self.plugins:
@@ -452,8 +478,11 @@ class Orchestrator:
             )
         return self._study
 
-    def create_study(self, name: str) -> str:
+    def create_study(self, name: str) -> Self:
         """Create a study and select it.
+
+        Returns:
+            A handle fixed to the study (see :meth:`select_study`).
 
         Raises:
             StudyExistsError: If the study exists. Use
@@ -469,13 +498,27 @@ class Orchestrator:
         self._study = name
         self.on_study_created(name)
         self.events.emit("study_created", study=name)
-        return name
+        return self._study_handle(name)
 
-    def select_study(self, name: str) -> str:
-        """Select an existing study.
+    def select_study(self, name: str) -> Self:
+        """Select an existing study, and return a handle fixed to it.
+
+        The study becomes this orchestrator's, so a script goes on with
+        ``orch``. The handle is a light copy that keeps working in ``name``
+        whatever is selected on ``orch`` later, or from another thread: it
+        shares the connection, plugins, hooks and the per-study locks. Set
+        :attr:`user` on it to record who works through it. Closing a handle
+        does nothing; close the orchestrator.
 
         Raises:
             StudyNotFoundError: If it doesn't exist.
+
+        Example:
+            >>> from flex_orchestrator.backend import MemoryBackend
+            >>> orch = Orchestrator(MemoryBackend())
+            >>> a, b = orch.create_study("a"), orch.create_study("b")
+            >>> a.study, b.study, orch.study
+            ('a', 'b', 'b')
         """
         if not self.backend.has_study(name):
             raise StudyNotFoundError(
@@ -483,10 +526,20 @@ class Orchestrator:
             )
         self._define_ledgers(name)
         self._study = name
-        return name
+        return self._study_handle(name)
 
-    def get_or_create_study(self, name: str) -> str:
-        """Select the study, creating it if it doesn't exist."""
+    def _study_handle(self, name: str) -> Self:
+        handle = copy.copy(self)
+        handle._study = name
+        handle._handle = True
+        return handle
+
+    def __repr__(self) -> str:
+        """Show the class and the selected study."""
+        return f"<{type(self).__name__} study={self._study!r}>"
+
+    def get_or_create_study(self, name: str) -> Self:
+        """Select the study, creating it if it doesn't exist; return its handle."""
         if self.backend.has_study(name):
             return self.select_study(name)
         return self.create_study(name)
@@ -579,6 +632,7 @@ class Orchestrator:
         *,
         parent: str | None = None,
         base_dir: str | os.PathLike[str] | None = None,
+        files: Mapping[str, bytes] | None = None,
         assets: Iterable[str] = (),
         spec_format: str | None = None,
         replace: bool = False,
@@ -601,6 +655,12 @@ class Orchestrator:
                 stored names, as :meth:`apply_surrogate`'s specs do.
             base_dir: The directory relative file paths resolve against; the
                 working directory by default (flex-pse's rule for a dict spec).
+            files: The referenced files' bytes, ``{path as the spec writes it:
+                bytes}``, instead of reading them (a service with an upload):
+                then nothing is read from disk. Stored exactly as the same
+                files read from disk, with the same ``spec_hash``. A spec read
+                back with :meth:`model_spec` ``(tag, with_files=True)`` stores
+                again unchanged with its ``files``. Not with ``base_dir``.
             assets: More file references, as JSON pointers to path strings,
                 for a format the orchestrator can't search.
             spec_format: The format; detected from the spec when omitted.
@@ -612,11 +672,12 @@ class Orchestrator:
         Raises:
             TagExistsError: If a model spec with this tag is stored.
             TagNotFoundError: If ``parent`` isn't a stored model spec.
-            SpecError: If the spec or its tag is invalid, or a referenced file
-                can't be read.
+            SpecError: If the spec or its tag is invalid, a referenced file
+                can't be read, or ``files`` lacks one or has one the spec
+                doesn't reference.
         """
         return self._store_spec(
-            MODEL_SPEC, tag, spec, parent, base_dir, assets, spec_format, replace
+            MODEL_SPEC, tag, spec, parent, base_dir, assets, spec_format, replace, files
         )
 
     def store_surrogate_spec(
@@ -649,13 +710,23 @@ class Orchestrator:
             SURROGATE_SPEC, tag, spec, parent, None, (), spec_format, replace
         )
 
-    def model_spec(self, tag: str) -> SpecRecord:
+    def model_spec(self, tag: str, *, with_files: bool = False) -> SpecRecord:
         """Return a stored model spec, checked against its hash.
+
+        Args:
+            tag: The spec's tag.
+            with_files: Also return its files' bytes: a
+                :class:`~flex_orchestrator.specs.SpecRecordWithFiles`, whose
+                ``files`` is ``{stored name: bytes}``. For a caller with no
+                folder to :meth:`materialize_spec` into.
 
         Raises:
             TagNotFoundError: If there is none with this tag.
         """
-        return self._read_spec(MODEL_SPEC, tag)[0]
+        record, files = self._read_spec(MODEL_SPEC, tag)
+        if not with_files:
+            return record
+        return SpecRecordWithFiles(**dict(record), files=dict(files))
 
     def surrogate_spec(self, tag: str) -> SpecRecord:
         """Return a stored surrogate spec, checked against its hash.
@@ -883,6 +954,7 @@ class Orchestrator:
         pointers: Iterable[str],
         spec_format: str | None,
         replace: bool,
+        given: Mapping[str, bytes] | None = None,
     ) -> SpecRecord:
         # Refuse a taken tag before reading any files; _guarded checks it
         # again, under the lock, when it writes.
@@ -896,7 +968,7 @@ class Orchestrator:
             }
         data, spec_format = normalise_spec(kind, spec, spec_format)
         references = find_assets(data, spec_format, pointers)
-        data, refs, files = collect_assets(data, references, base_dir, known)
+        data, refs, files = collect_assets(data, references, base_dir, known, given)
         record = SpecRecord.create(
             kind,
             tag,
@@ -1879,7 +1951,7 @@ class Orchestrator:
             "flexorch_version": version("flex-orchestrator"),
             "flexpse_version": _version_of("flex-pse"),
             "acquirium_version": _version_of("acquirium"),
-            "flexorch_user": _user(),
+            "flexorch_user": self.user or _user(),
         }
         if kind == RESULT_KIND:
             hooks = self.hooks.merged(getattr(self._call, "hooks", None) or HookSet())

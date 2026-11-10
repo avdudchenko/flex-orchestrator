@@ -15,6 +15,7 @@ dependencies:
       - "flex-pse[parameterize,solvers] @ git+https://github.com/flex-pse/flex-pse.git@809b25b6fba346cd6fcc5960e2d80db267e1c7fe"
       # Ray 2.60.0 crashes in ray.shutdown() on Windows; drop this once a newer one doesn't.
       - "ray<2.60"
-      # Acquirium main (PR #78 merged) - switch to a PyPI release once one has it
-      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
+      # Acquirium main (b7f6fc8, 2026-11-09, the v0.4.0a9 release commit), pinned by SHA.
+      # We track main rather than PyPI; move the SHA forward deliberately and rerun the suite.
+      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@b7f6fc8a764345dd172e9217cc25f255255493ad"
       # - "flex-orchestrator[server] @ ."   # enable once M0 adds pyproject.toml

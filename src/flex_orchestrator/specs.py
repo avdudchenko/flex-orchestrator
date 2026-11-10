@@ -442,6 +442,21 @@ class SpecRecord(BaseModel):
             )
 
 
+class SpecRecordWithFiles(SpecRecord):
+    """A stored spec with its files' bytes, for a caller that has no folder.
+
+    What ``model_spec(tag, with_files=True)`` returns (PLAN.md D16). ``files``
+    is ``{stored name: bytes}``, the names the spec holds at its assets'
+    pointers; it isn't part of the record's JSON. Pass the spec and the files
+    to ``store_model_spec(..., files=...)`` to store it again, unchanged.
+
+    Attributes:
+        files: ``{stored name: bytes}`` for every asset.
+    """
+
+    files: dict[str, bytes] = Field(default_factory=dict, exclude=True, repr=False)
+
+
 def _canonical(value: Any) -> Any:
     """Rewrite integral floats as ints, recursively, for :func:`canonical_json`."""
     if isinstance(value, dict):

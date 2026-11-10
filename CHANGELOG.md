@@ -3,6 +3,30 @@
 ## Unreleased
 
 ### Added
+- Ready to embed in a host application (PLAN.md D16, M6):
+  - A long-lived local Acquirium: `flex-orch [--data-dir D] acquirium start
+    [--config acquirium.toml] [--port P] | status | stop`
+    (`flex_orchestrator.service`). It runs `acquirium server` detached on
+    loopback, optionally with your own config and its drivers, so it outlives
+    every script; while it runs, `Orchestrator(data_dir=)` attaches to it and
+    never stops it. `FLEXORCH_START_ACQUIRIUM=0` makes the orchestrator fail
+    rather than start a short-lived managed server.
+  - `FLEXORCH_ACQUIRIUM_URL`: `Orchestrator()` with no store argument connects
+    to that Acquirium (mode 3). An explicit argument wins.
+  - Study handles: `select_study`, `create_study` and `get_or_create_study`
+    still select the study, and now return a handle fixed to it that shares the
+    connection, so callers in several threads never see each other's selection.
+    `orch.user` (or a handle's) sets who runs and stores are recorded as.
+  - Spec files as bytes: `store_model_spec(tag, spec, files={path: bytes})`
+    stores a spec's files without reading the disk, exactly as the same files
+    read from disk (the same `spec_hash`), and `model_spec(tag,
+    with_files=True)` returns them (`SpecRecordWithFiles`).
+  - `flex-orch verify [--study S ...] [--samples N] [--against FILE]`
+    (`flex_orchestrator.verify`): per study and kind, run counts, tags and
+    hashes of a sample of values, and problems (a tag stored twice, runs left
+    running, unreadable values). `--against` an earlier report exits 1 on any
+    difference; a copy (an import, a move) matches its original.
+  - `python -m flex_orchestrator` runs the CLI.
 - Design studies, built on flex-pse's `flexdesign`: size equipment once across
   every modeled year and representative month. Add a `design:` section to a study
   config, or store a whole `DesignSpec` as a model spec (format `flex-pse.design`,
@@ -15,6 +39,17 @@
   - `model_inputs` can't be combined with a design yet (#5).
 
 ### Changed
+- `select_study`, `create_study` and `get_or_create_study` return a study
+  handle instead of the study's name; `.study` on it is the name.
+- The memory backend locks every method, and the file backend locks its reads
+  too, so both are safe to share between threads.
+- The Acquirium backend's stream lookups (`stream_info`, `find_streams`,
+  `stream_rows`) use Acquirium's query API instead of SPARQL, so they don't
+  depend on its graph layout. Stream values now come in the unit `stream_info`
+  reports: the point's unit, converted by Acquirium if the stream is stored in
+  another. Only the `sparql` selector still runs SPARQL, the query its user
+  writes.
+- Acquirium is pinned to `main` at `b7f6fc8` (the `v0.4.0a9` release commit).
 - flex-pse is pinned to v0.3.0. Flowsheet specs are now schema `0.1.1`; `0.1.0`
   specs still load, and BatteryModel's `capacity` migrates to `energy_capacity`.
   - Validating normalises a `0.1.0` spec to different JSON, so storing it again

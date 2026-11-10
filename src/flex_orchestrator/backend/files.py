@@ -84,6 +84,9 @@ class _Run:
 class FileBackend:
     """Studies, variables and runs kept in a folder (see the module docstring).
 
+    One process uses a folder at a time; within it, the backend is safe to
+    share between threads.
+
     Args:
         path: The folder. It's created if it doesn't exist; an existing folder
             must be empty or one this backend wrote.
@@ -133,7 +136,8 @@ class FileBackend:
 
     def studies(self) -> list[str]:
         """Return the names of every study, sorted."""
-        return sorted(self._variables)
+        with self._lock:  # another thread may be adding one
+            return sorted(self._variables)
 
     def variable(self, study: str, label: str) -> Variable | None:
         """Return the declaration of ``label``, or ``None``."""
@@ -259,18 +263,20 @@ class FileBackend:
         """Return the study's runs, oldest first."""
         self._study(study)
         wanted = _json(dict(metadata or {}))
-        found = [
-            entry
-            for entry in self._runs.values()
-            if entry.study == study
-            and (status is None or entry.run.status == status)
-            and all(entry.run.metadata.get(k) == v for k, v in wanted.items())
-        ]
+        with self._lock:  # another thread may be starting or deleting runs
+            found = [
+                entry
+                for entry in self._runs.values()
+                if entry.study == study
+                and (status is None or entry.run.status == status)
+                and all(entry.run.metadata.get(k) == v for k, v in wanted.items())
+            ]
         return [entry.run for entry in sorted(found, key=lambda e: e.seq)]
 
     def variables(self, study: str) -> list[Variable]:
         """Return every variable declared in the study."""
-        return list(self._study(study).values())
+        with self._lock:
+            return list(self._study(study).values())
 
     def delete_runs(self, study: str, run_ids: Sequence[str]) -> None:
         """Delete finished runs and everything they recorded."""

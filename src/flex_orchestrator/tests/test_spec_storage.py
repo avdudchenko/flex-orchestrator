@@ -12,6 +12,7 @@ import pyomo.environ as pyo
 import pytest
 
 from flex_orchestrator.errors import SpecError, TagExistsError, TagNotFoundError
+from flex_orchestrator.specs import SpecRecordWithFiles
 from flex_orchestrator.testing import DEMO_SPEC, LINEAR_POWER
 
 pytest.importorskip("flexops")
@@ -240,3 +241,66 @@ def test_a_study_run_reads_each_spec_once(monkeypatch):
             orch.model_spec("b")
     orch.model_spec("a")
     assert len(reads) == 2  # outside the block, reads go to the store again
+
+
+# Spec files as bytes (PLAN.md D16, M6): a host has an upload, not a folder.
+
+
+def test_a_spec_stored_from_bytes_matches_one_stored_from_disk(orch, tariff_dir):
+    """The M6 exit: the same hash and assets, and the same bytes back."""
+    data = (tariff_dir / "tariff.csv").read_bytes()
+    disk = orch.store_model_spec("disk", tariff_spec(), base_dir=tariff_dir)
+    sent = orch.store_model_spec("sent", tariff_spec(), files={"tariff.csv": data})
+    assert sent.spec_hash == disk.spec_hash
+    assert sent.assets == disk.assets and sent.spec == disk.spec
+    [ref] = sent.assets.values()
+
+    back = orch.model_spec("sent", with_files=True)
+    assert isinstance(back, SpecRecordWithFiles) and back.files == {ref.name: data}
+    assert "files" not in back.model_dump()  # not part of the record's JSON
+    assert orch.model_spec("sent") == sent  # without the flag, the plain record
+    # Read back with its files, it stores again unchanged.
+    again = orch.store_model_spec("again", back.spec, files=back.files)
+    assert again.spec_hash == sent.spec_hash and again.assets == sent.assets
+
+
+def test_bytes_for_a_subfolder_path_get_the_files_name(orch, tariff_dir):
+    data = (tariff_dir / "tariff.csv").read_bytes()
+    record = orch.store_model_spec(
+        "sub", tariff_spec("inputs/tariff.csv"), files={"inputs/tariff.csv": data}
+    )
+    [ref] = record.assets.values()
+    assert ref.name.startswith("assets/") and ref.name.endswith("-tariff.csv")
+    assert "inputs" not in ref.name
+
+
+def test_given_bytes_never_read_the_disk(orch, tariff_dir):
+    # A spec from elsewhere names a file on this machine: with files=, it
+    # isn't read, even though it exists.
+    path = str(tariff_dir / "tariff.csv")
+    with pytest.raises(SpecError, match="no bytes were given"):
+        orch.store_model_spec("x", tariff_spec(path), files={})
+    data = (tariff_dir / "tariff.csv").read_bytes()
+    with pytest.raises(SpecError, match="doesn't reference"):
+        orch.store_model_spec(
+            "x", tariff_spec(), files={"tariff.csv": data, "extra.csv": b"1"}
+        )
+    with pytest.raises(SpecError, match="base_dir"):
+        orch.store_model_spec(
+            "x", tariff_spec(), files={"tariff.csv": data}, base_dir=tariff_dir
+        )
+    with pytest.raises(TagNotFoundError):
+        orch.model_spec("x")  # nothing was stored
+
+
+def test_a_stored_name_with_other_bytes_gets_a_new_name(orch, tariff_dir):
+    data = (tariff_dir / "tariff.csv").read_bytes()
+    sent = orch.store_model_spec("sent", tariff_spec(), files={"tariff.csv": data})
+    [ref] = sent.assets.values()
+    edited = data + b"\n"
+    other = orch.store_model_spec(
+        "edited", copy.deepcopy(sent.spec), files={ref.name: edited}
+    )
+    [new] = other.assets.values()
+    # The name follows the bytes, so it can't claim the old file's hash.
+    assert new.name != ref.name and other.spec_hash != sent.spec_hash

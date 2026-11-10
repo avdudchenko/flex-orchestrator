@@ -34,9 +34,6 @@ from flex_orchestrator.errors import StorageError
 
 QUDT_UNIT = "http://qudt.org/vocab/unit/"
 _EPOCH = datetime.min.replace(tzinfo=UTC)
-_QUDT_SCHEMA = "http://qudt.org/schema/qudt/"
-_BRICK_REF = "https://brickschema.org/schema/Brick/ref#"
-_ACQ = "urn:acquirium#"
 
 
 class AcquiriumBackend:
@@ -249,54 +246,50 @@ class AcquiriumBackend:
     def stream_rows(self, ref: str, start: Any = None, end: Any = None) -> list[Row]:
         """Return a stream's samples, oldest first, as UTC ``(time, value)`` rows.
 
+        Read through Acquirium's query API, so the values are in the unit
+        :meth:`stream_info` reports (Acquirium converts a stream stored in
+        another unit than its point's).
+
         Args:
             ref: The stream's reference URI.
             start: Only samples at or after this datetime.
             end: Only samples at or before this datetime.
         """
         frame = _call(
-            self.acquirium.client.timeseries_df,
-            ref,
-            start=None if start is None else to_utc(start).isoformat(),
-            end=None if end is None else to_utc(end).isoformat(),
+            self.acquirium.query().measurement(ref=ref).dataframe,
+            "narrow",
+            start=None if start is None else to_utc(start),
+            end=None if end is None else to_utc(end),
         )
         if frame.is_empty():
             return []
-        return to_rows(frame["ts"].to_list(), frame["value"].to_list())
+        return to_rows(frame["time"].to_list(), frame["value_numeric"].to_list())
 
     def sparql_select(self, query: str) -> dict[str, Any]:
-        """Run a read-only SPARQL query; return ``{"columns", "rows"}``."""
+        """Run a read-only SPARQL query; return ``{"columns", "rows"}``.
+
+        Only for the ``sparql`` selector, whose query the user writes; the
+        other stream lookups go through Acquirium's query API.
+        """
         result = _call(self.acquirium.client.sparql_query, query)
         return {"columns": list(result["columns"]), "rows": list(result["rows"])}
 
     def stream_info(self, refs: Sequence[str]) -> dict[str, dict[str, Any]]:
         """Return each stream's ``name`` (its source-local name), ``label`` and unit.
 
-        The unit is the QUDT key on the stream, or on the point that refers to
-        it; ``None`` if neither has one.
+        The label is its point's; the unit is a QUDT key, the one
+        :meth:`stream_rows` gives values in, or ``None`` if it has none. A
+        stream Acquirium doesn't have gets no ``name``.
         """
         info = {ref: {"name": None, "label": None, "unit": None} for ref in refs}
         if not refs:
             return info
-        values = " ".join(f"<{ref}>" for ref in refs)
-        query = f"""PREFIX ref: <{_BRICK_REF}>
-PREFIX qudt: <{_QUDT_SCHEMA}>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-SELECT ?ref ?name ?label ?unit WHERE {{
-  VALUES ?ref {{ {values} }}
-  OPTIONAL {{ ?ref <{_ACQ}refName> ?name }}
-  OPTIONAL {{ ?point ref:hasExternalReference ?ref .
-             OPTIONAL {{ ?point rdfs:label ?label }}
-             OPTIONAL {{ ?point qudt:hasUnit ?pointUnit }} }}
-  OPTIONAL {{ ?ref qudt:hasUnit ?refUnit }}
-  BIND(COALESCE(?refUnit, ?pointUnit) AS ?unit)
-}}"""
-        for ref, name, label, unit in self.sparql_select(query)["rows"]:
-            found = info[ref]
-            found["name"] = found["name"] or name
-            found["label"] = found["label"] or label
-            if unit and not found["unit"]:
-                found["unit"] = qudt_key(unit)
+        for row in self._measurements(ref=list(info)):
+            found = info[row["ref_uri"]]
+            found["name"] = found["name"] or row["ref_name"]
+            found["label"] = found["label"] or row["point_label"]
+            if row["unit"] and not found["unit"]:
+                found["unit"] = qudt_key(row["unit"])
         return info
 
     def stream_ref(self, source_id: str, ref_name: str) -> str:
@@ -312,21 +305,20 @@ SELECT ?ref ?name ?label ?unit WHERE {{
 
         A label equal to ``text`` (ignoring case) wins; failing that, every
         label containing all of its words. With no label match, ``text`` is
-        resolved to a concept with Acquirium's ``resolve`` and that concept's
+        resolved to a point with Acquirium's ``resolve`` and that point's
         streams are returned.
 
         Returns:
             ``[{"ref", "label", "point"}]``, sorted by label.
         """
-        query = f"""PREFIX ref: <{_BRICK_REF}>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-SELECT ?point ?label ?ref WHERE {{
-  ?point ref:hasExternalReference ?ref .
-  ?point rdfs:label ?label .
-}}"""
         rows = [
-            {"point": point, "label": label, "ref": ref}
-            for point, label, ref in self.sparql_select(query)["rows"]
+            {
+                "point": row["point_uri"],
+                "label": row["point_label"],
+                "ref": row["ref_uri"],
+            }
+            for row in self._measurements()
+            if row["point_label"]
         ]
         wanted = text.strip().lower()
         exact = [r for r in rows if r["label"].strip().lower() == wanted]
@@ -337,15 +329,20 @@ SELECT ?point ?label ?ref WHERE {{
         if not matched:
             concept = _call(self.acquirium.client.resolve, text)
             if concept is not None:
-                query = (
-                    f"PREFIX ref: <{_BRICK_REF}>\nSELECT ?ref WHERE {{ <{concept}> "
-                    "ref:hasExternalReference ?ref }"
-                )
                 matched = [
-                    {"point": concept, "label": text, "ref": ref}
-                    for (ref,) in self.sparql_select(query)["rows"]
+                    {"point": concept, "label": text, "ref": row["ref_uri"]}
+                    for row in self._measurements(uri=concept)
                 ]
         return sorted(matched, key=lambda r: (r["label"], r["ref"]))
+
+    def _measurements(self, **match: Any) -> list[dict[str, Any]]:
+        """Acquirium's measurement points matching ``match``, one row per stream.
+
+        Each row has ``ref_uri``, ``ref_name``, ``point_uri``, ``point_label``
+        and ``unit`` (a URI). Reading this doesn't fetch stream statistics.
+        """
+        data = _call(self.acquirium.query().measurement(**match).data)
+        return _call(data.metadata, include_ref_uris=True).to_dicts()
 
     def _study(self, name: str) -> Any:
         if name not in self._studies:

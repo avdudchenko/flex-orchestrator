@@ -35,7 +35,13 @@ from flex_orchestrator.hooks import (
     TimeSetsFn,
     run_solve,
 )
-from flex_orchestrator.specs import SpecRecord, canonical_json, spec_hash, to_json_spec
+from flex_orchestrator.specs import (
+    SpecRecord,
+    SpecRecordWithFiles,
+    canonical_json,
+    spec_hash,
+    to_json_spec,
+)
 
 __version__ = _dist_version("flex-orchestrator")
 
@@ -80,6 +86,7 @@ __all__ = [
     "SolveOutcome",
     "SpecError",
     "SpecRecord",
+    "SpecRecordWithFiles",
     "StorageError",
     "StoredResult",
     "StudyConfigError",
