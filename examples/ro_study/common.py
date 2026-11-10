@@ -10,7 +10,7 @@ from pathlib import Path
 
 import flexops as fo
 
-from flex_orchestrator import Orchestrator
+from flexorchestrator import Orchestrator
 
 HERE = Path(__file__).parent
 MODEL = HERE.parent / "ro_surrogates"  # the model, its tariff file and its data

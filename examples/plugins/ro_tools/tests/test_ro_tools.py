@@ -1,10 +1,10 @@
-"""The plugin's own tests: no database, no solver (flex_orchestrator.testing)."""
+"""The plugin's own tests: no database, no solver (flexorchestrator.testing)."""
 
 import pytest
 from ro_tools import ROOrchestrator, cost_table, plugin
 
-from flex_orchestrator.export import ExportedSeries, ModelData
-from flex_orchestrator.testing import memory_orchestrator, run_command_in_test
+from flexorchestrator.export import ExportedSeries, ModelData
+from flexorchestrator.testing import memory_orchestrator, run_command_in_test
 
 pytestmark = pytest.mark.unit
 

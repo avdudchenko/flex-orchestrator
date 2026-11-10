@@ -52,7 +52,7 @@
   },
   "$id": "https://flex-orchestrator/schemas/flexorch-export/1/dataset.json",
   "additionalProperties": false,
-  "description": "``data/<name>.json``: one dataset (D6).\n\nAttributes:\n    name: The dataset's name.\n    run_id: Its run in ``<s>::data``.\n    created_at: When it was stored.\n    created_by: Who stored it.\n    time_index: UTC timestamps, ISO 8601.\n    columns: ``{column: DatasetColumn}``, in order.\n    metadata: The run's metadata.\n    manifest: The dataset's stored manifest.",
+  "description": "``data/<name>.json``: one dataset.\n\nAttributes:\n    name: The dataset's name.\n    run_id: Its run in ``<s>::data``.\n    created_at: When it was stored.\n    created_by: Who stored it.\n    time_index: UTC timestamps, ISO 8601.\n    columns: ``{column: DatasetColumn}``, in order.\n    metadata: The run's metadata.\n    manifest: The dataset's stored manifest.",
   "properties": {
     "columns": {
       "additionalProperties": {

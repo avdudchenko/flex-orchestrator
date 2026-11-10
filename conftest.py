@@ -84,7 +84,7 @@ def _no_solver_in_unit_tier(request, monkeypatch):
 @pytest.fixture
 def demo_spec():
     """A fresh copy of the shared flex-pse demo flowsheet spec."""
-    from flex_orchestrator.testing import DEMO_SPEC
+    from flexorchestrator.testing import DEMO_SPEC
 
     return copy.deepcopy(DEMO_SPEC)
 
@@ -93,14 +93,14 @@ def demo_spec():
 def demo_model(demo_spec):
     """The flex-pse demo, built (not solved) with the default build hook."""
     pytest.importorskip("flexops")
-    from flex_orchestrator.flexpse import build
+    from flexorchestrator.flexpse import build
 
     return build(demo_spec)
 
 
 def _build(spec):
     pytest.importorskip("flexops")
-    from flex_orchestrator.flexpse import build
+    from flexorchestrator.flexpse import build
 
     return build(copy.deepcopy(spec))
 
@@ -113,7 +113,7 @@ def logic_model():
     train's ``startup`` / ``shutdown`` is indexed over every time point but the
     first, by an anonymous Set (a real subset of time).
     """
-    from flex_orchestrator.testing import LOGIC_SPEC
+    from flexorchestrator.testing import LOGIC_SPEC
 
     return _build(LOGIC_SPEC)
 
@@ -121,7 +121,7 @@ def logic_model():
 @pytest.fixture
 def surrogate_model():
     """A pump surrogate's ``coefficient_vars`` and a battery with fixed dispatch."""
-    from flex_orchestrator.testing import SURROGATE_DISPATCH_SPEC
+    from flexorchestrator.testing import SURROGATE_DISPATCH_SPEC
 
     return _build(SURROGATE_DISPATCH_SPEC)
 
@@ -129,7 +129,7 @@ def surrogate_model():
 @pytest.fixture
 def network_model():
     """Paths through a network of two plants."""
-    from flex_orchestrator.testing import NETWORK_SPEC
+    from flexorchestrator.testing import NETWORK_SPEC
 
     return _build(NETWORK_SPEC)
 
@@ -137,7 +137,7 @@ def network_model():
 @pytest.fixture
 def memory_backend():
     """An empty in-memory backend."""
-    from flex_orchestrator.backend import MemoryBackend
+    from flexorchestrator.backend import MemoryBackend
 
     return MemoryBackend()
 
@@ -164,10 +164,10 @@ def _make_backend(request, kind):
     if kind == "memory":
         return request.getfixturevalue("memory_backend")
     if kind == "files":
-        from flex_orchestrator.backend import FileBackend
+        from flexorchestrator.backend import FileBackend
 
         return FileBackend(request.getfixturevalue("tmp_path_factory").mktemp("files"))
-    from flex_orchestrator.backend import AcquiriumBackend
+    from flexorchestrator.backend import AcquiriumBackend
 
     return AcquiriumBackend(request.getfixturevalue("acquirium_local"))
 
@@ -228,7 +228,7 @@ def study_name():
 @pytest.fixture
 def orch(orch_backend, study_name):
     """An orchestrator on each ``orch_backend``, with a fresh study selected."""
-    from flex_orchestrator.orchestrator import Orchestrator
+    from flexorchestrator.orchestrator import Orchestrator
 
     orchestrator = Orchestrator(orch_backend)
     orchestrator.create_study(study_name)

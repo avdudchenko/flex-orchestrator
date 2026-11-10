@@ -16,3 +16,6 @@ docs/_build/
 tmp_flexorch/
 examples/ro_study/export/
 examples/ro_study/on_disk/
+
+# Internal design plan, kept locally only
+PLAN.md

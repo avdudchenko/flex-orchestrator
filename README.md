@@ -5,8 +5,8 @@ process-model studies and stores everything they need and produce in
 [Acquirium](https://github.com/DataDrivenCPS/acquirium): model specs,
 operating data, surrogate fits and solved results. A study is a model spec
 plus sweeps (surrogates, variables, configuration options, cases). Each solve is stored as a run you can query,
-compare, export to disk, and import elsewhere. See [PLAN.md](PLAN.md) for the
-design.
+compare, export to disk, and import elsewhere. See [docs/](docs/) for the
+configuration and design notes.
 
 ## Install
 
@@ -53,8 +53,8 @@ a short-lived one when it isn't running.
 To keep studies in a folder on disk, with no server, pass a `FileBackend`:
 
 ```python
-from flex_orchestrator import Orchestrator
-from flex_orchestrator.backend import FileBackend
+from flexorchestrator import Orchestrator
+from flexorchestrator.backend import FileBackend
 
 with Orchestrator(FileBackend("runs")) as orch:
     ...
@@ -73,7 +73,7 @@ which defines `operating_data`, `ro_model`, `UNITS`, `KEEP` and the fitted
 `linear` surrogate:
 
 ```python
-from flex_orchestrator import Orchestrator
+from flexorchestrator import Orchestrator
 
 with Orchestrator(data_dir=".flexorch") as orch:
     orch.create_study("ro_surrogates")
@@ -104,7 +104,7 @@ type. The config's JSON Schema is in [docs/schemas/](docs/schemas/).
 
 ## Embedding in an application
 
-A service or app calls the library directly (PLAN.md D16):
+A service or app calls the library directly:
 
 - **One study per caller.** Selecting a study makes it the orchestrator's, and
   also returns a handle fixed to it that shares the connection. A script keeps
@@ -143,4 +143,4 @@ limit). See [docs/decisions/0001-ray-execution.md](docs/decisions/0001-ray-execu
 - [examples/](examples/README.md): the RO examples and a sample plugin
   ([examples/plugins/ro_tools](examples/plugins/ro_tools/README.md)).
 - [benchmarking/](benchmarking/): Acquirium storage timings.
-- [CHANGELOG.md](CHANGELOG.md) and [PLAN.md](PLAN.md).
+- [CHANGELOG.md](CHANGELOG.md).

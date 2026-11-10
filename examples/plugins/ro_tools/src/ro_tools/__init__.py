@@ -7,15 +7,15 @@ plugin's version.
 Enable it with ``FLEXORCH_PLUGINS=ro_tools`` (installing it isn't enough), then
 ``flex-orch cmd cost_table --study my_study``, or from Python::
 
-    from flex_orchestrator.ext import create_orchestrator
+    from flexorchestrator.ext import create_orchestrator
     orch = create_orchestrator(plugins=["ro_tools"])
     orch.run_command("cost_table")
 """
 
 from pydantic import BaseModel
 
-from flex_orchestrator import Orchestrator
-from flex_orchestrator.ext import Plugin, command
+from flexorchestrator import Orchestrator
+from flexorchestrator.ext import Plugin, command
 
 __version__ = "0.1.0"
 
@@ -56,8 +56,8 @@ plugin = Plugin(
     commands=[cost_table],
     hooks={
         "ro_fake": {
-            "build": "flex_orchestrator.testing:fake_build",
-            "solve": "flex_orchestrator.testing:fake_solve",
+            "build": "flexorchestrator.testing:fake_build",
+            "solve": "flexorchestrator.testing:fake_solve",
         }
     },
     orchestrator_cls=ROOrchestrator,

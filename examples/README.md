@@ -2,7 +2,7 @@
 
 Scripts that use flex-orchestrator from start to finish. They aren't part of the
 installed package, and each runs in the test suite as an integration test
-(`src/flex_orchestrator/tests/test_examples.py`), except
+(`src/flexorchestrator/tests/test_examples.py`), except
 `ro_study/compare_ray.py`, a timing demo that takes a few minutes.
 
 | Example | What it covers |

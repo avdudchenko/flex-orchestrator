@@ -1,16 +1,16 @@
 [importlinter]
 root_packages =
-    flex_orchestrator
+    flexorchestrator
 include_external_packages = True
 
-# PLAN.md §3 layering. The HTTP service is a host application's (D16), never
-# this library's.
+# The package's layering. The HTTP service belongs to a host application, never
+# to this library.
 
 [importlinter:contract:no-http-in-core]
 name = the library never imports HTTP frameworks, web servers or JWT libraries
 type = forbidden
 source_modules =
-    flex_orchestrator
+    flexorchestrator
 forbidden_modules =
     fastapi
     starlette
@@ -23,18 +23,18 @@ type = forbidden
 # The plugin-test helpers build an orchestrator only when called; the fake
 # hooks and specs stay importable without pyomo.
 ignore_imports =
-    flex_orchestrator.testing.orchestrators -> flex_orchestrator.backend
-    flex_orchestrator.testing.orchestrators -> flex_orchestrator.ext
+    flexorchestrator.testing.orchestrators -> flexorchestrator.backend
+    flexorchestrator.testing.orchestrators -> flexorchestrator.ext
 source_modules =
-    flex_orchestrator.hooks
-    flex_orchestrator.specs
-    flex_orchestrator.errors
-    flex_orchestrator.testing
-    flex_orchestrator.study.config
-    flex_orchestrator.fitting.models
-    flex_orchestrator.inputs.models
-    flex_orchestrator.ext.commands
-    flex_orchestrator.ext.events
+    flexorchestrator.hooks
+    flexorchestrator.specs
+    flexorchestrator.errors
+    flexorchestrator.testing
+    flexorchestrator.study.config
+    flexorchestrator.fitting.models
+    flexorchestrator.inputs.models
+    flexorchestrator.ext.commands
+    flexorchestrator.ext.events
 forbidden_modules =
     pyomo
     flexcore
@@ -47,7 +47,7 @@ forbidden_modules =
 name = the exporter depends only on pyomo, not flex-pse or Acquirium
 type = forbidden
 source_modules =
-    flex_orchestrator.export
+    flexorchestrator.export
 forbidden_modules =
     flexcore
     flexdesign
@@ -58,25 +58,25 @@ forbidden_modules =
 [importlinter:contract:acquirium-only-in-backend]
 name = only backend.acquirium and connection talk to Acquirium; the orchestrator uses hooks, not flex-pse
 type = forbidden
-# The orchestrator reaches Acquirium only through connection.connect (D11),
+# The orchestrator reaches Acquirium only through connection.connect,
 # which imports Acquirium lazily and builds the backend.
 ignore_imports =
-    flex_orchestrator.orchestrator -> flex_orchestrator.connection
+    flexorchestrator.orchestrator -> flexorchestrator.connection
 source_modules =
-    flex_orchestrator.orchestrator
-    flex_orchestrator.results
-    flex_orchestrator.backend.base
-    flex_orchestrator.backend.memory
-    flex_orchestrator.backend.files
-    flex_orchestrator.ext
-    flex_orchestrator.fitting
-    flex_orchestrator.inputs
-    flex_orchestrator.study
-    flex_orchestrator.archive
-    flex_orchestrator.cli
-    flex_orchestrator.parallel
-    flex_orchestrator.verify
-    flex_orchestrator.service
+    flexorchestrator.orchestrator
+    flexorchestrator.results
+    flexorchestrator.backend.base
+    flexorchestrator.backend.memory
+    flexorchestrator.backend.files
+    flexorchestrator.ext
+    flexorchestrator.fitting
+    flexorchestrator.inputs
+    flexorchestrator.study
+    flexorchestrator.archive
+    flexorchestrator.cli
+    flexorchestrator.parallel
+    flexorchestrator.verify
+    flexorchestrator.service
 forbidden_modules =
     acquirium
     requests

@@ -13,8 +13,8 @@ import shutil
 from common import HERE, new_study, report
 from sweep_surrogates import STUDY
 
-from flex_orchestrator import Orchestrator
-from flex_orchestrator.backend import FileBackend
+from flexorchestrator import Orchestrator
+from flexorchestrator.backend import FileBackend
 
 FOLDER = HERE / "on_disk"
 

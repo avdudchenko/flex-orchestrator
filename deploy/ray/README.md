@@ -1,10 +1,10 @@
 # A tenant's Ray cluster
 
-Studies with `max_workers > 1` run on Ray (PLAN.md D13). A small tenant uses a
+Studies with `max_workers > 1` run on Ray. A small tenant uses a
 local Ray inside its orchestrator container, which is the default and needs
 nothing from this folder. A larger tenant gets **its own** Ray cluster, which
 this folder templates. A Ray cluster is never shared between tenants, because
-its workers run the tenant's hook and plugin code (D14).
+its workers run the tenant's hook and plugin code.
 
 | File | For |
 | --- | --- |
@@ -18,13 +18,13 @@ orch.execute_study(cfg, max_workers=16, ray_address="ray://ray-head:10001")
 ```
 
 You can also set `execution.ray_address` in the config, pass `flex-orch run
---ray-address`, or set `FLEXORCH_RAY_ADDRESS` (D16, the tenant stack's
+--ray-address`, or set `FLEXORCH_RAY_ADDRESS` (the tenant stack's
 environment).
 
 ## What the cluster needs
 
 - **The same software as the orchestrator.** Use the tenant's orchestrator
-  image (`deploy/docker`, M6), so that flex-orchestrator, flex-pse, the
+  image (`deploy/docker`), so that flex-orchestrator, flex-pse, the
   solvers and every hook or plugin package match. Workers import hooks by
   name (`"mypkg.models:build"`). A hook defined in a script you run can't be
   sent, and `execute_study` refuses it before anything runs.
@@ -46,13 +46,12 @@ environment).
 Each task reserves `execution.resources.num_cpus` (1 by default) and,
 optionally, `memory` (bytes). Ray runs as many tasks at once as fit, up to
 `max_workers`. Set `execution.max_calls` to restart a worker process after
-that many tasks, if a solver leaks memory. The M5 benchmark
+that many tasks, if a solver leaks memory. The Ray benchmark
 (`docs/decisions/0001-ray-execution.md`) has measured memory per worker and
 time per task.
 
 ## Status
 
-These templates aren't tested yet. The M5 benchmark ran on local Ray on one
+These templates aren't tested yet. The Ray benchmark ran on local Ray on one
 Windows machine, and the 2-node run waits for a Linux host with Docker. The
-tenant network and image they reference arrive with M6 (`deploy/tenant`,
-`deploy/docker`).
+network and image they reference are the host application's.

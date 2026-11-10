@@ -11,7 +11,7 @@ description = "A sample flex-orchestrator plugin: a cost table command and an or
 requires-python = ">=3.12"
 dependencies = ["flex-orchestrator"]
 
-[project.entry-points."flex_orchestrator.plugins"]
+[project.entry-points."flexorchestrator.plugins"]
 ro_tools = "ro_tools:plugin"
 
 [tool.setuptools.packages.find]

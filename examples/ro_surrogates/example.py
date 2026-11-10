@@ -29,7 +29,7 @@ from flexparameterize import ConstantIntensityRegressor, LinearRegressor
 from pyomo.environ import units as u
 from pyomo.network import Arc
 
-from flex_orchestrator import Orchestrator
+from flexorchestrator import Orchestrator
 
 HERE = Path(__file__).parent
 

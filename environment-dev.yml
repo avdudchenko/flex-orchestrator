@@ -19,7 +19,7 @@ dependencies:
   - pytest-cov
   - pytest-timeout
   - pytest-xdist
-  # code style (D20): same versions as flex-pse's .pre-commit-config.yaml
+  # code style: same versions as flex-pse's .pre-commit-config.yaml
   - black=26.5.1
   - ruff=0.15.20
   - pre-commit
@@ -38,5 +38,5 @@ dependencies:
       - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@b7f6fc8a764345dd172e9217cc25f255255493ad"
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
       - httpx
-      # parallel execution (D13) uses ray, which already comes with acquirium
-      - -e .[dev]   # add the server extra in M7
+      # parallel execution uses ray, which already comes with acquirium
+      - -e .[dev]

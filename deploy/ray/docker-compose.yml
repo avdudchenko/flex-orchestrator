@@ -1,4 +1,4 @@
-# One tenant's own Ray cluster (PLAN.md D13, D14): a head and N workers on the
+# One tenant's own Ray cluster: a head and N workers on the
 # tenant's internal network. Nothing here is shared between tenants.
 #
 #   TENANT=tenant_a IMAGE=flexorch-tenant:0.1 docker compose -p ray-tenant_a up -d \
@@ -8,7 +8,7 @@
 #   execute_study(cfg, max_workers=8, ray_address="ray://ray-head:10001")
 # or FLEXORCH_RAY_ADDRESS=ray://ray-head:10001.
 #
-# IMAGE is the tenant's orchestrator image (deploy/docker, M6): the workers
+# IMAGE is the tenant's orchestrator image (deploy/docker): the workers
 # must have the same flex-orchestrator, flex-pse, solvers and plugin/hook
 # packages as the orchestrator, because they import hooks by name.
 
@@ -56,6 +56,6 @@ services:
 
 networks:
   tenant:
-    # The tenant stack's internal network (deploy/tenant, M6), e.g. flexorch_tenant_a.
+    # The tenant stack's internal network (deploy/tenant), e.g. flexorch_tenant_a.
     name: ${TENANT_NETWORK:-flexorch_${TENANT:?set TENANT}}
     external: true

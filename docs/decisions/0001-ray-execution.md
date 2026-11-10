@@ -1,8 +1,7 @@
 # 0001: Running studies on Ray
 
-- **Status:** accepted (M5)
+- **Status:** accepted
 - **Date:** 2026-10-23
-- **Plan:** PLAN.md D13 (parallel execution), D14 (Ray per tenant)
 
 ## Decision
 
@@ -24,7 +23,7 @@ compares every stored value.
 
 ## Benchmark
 
-`src/flex_orchestrator/study/tests/test_benchmark_ray.py`, run with
+`src/flexorchestrator/study/tests/test_benchmark_ray.py`, run with
 `pytest -m benchmark -k ray -s`.
 
 - **Model:** the RO plant (feed → RO → tank → product) over a month at
@@ -72,7 +71,7 @@ Findings:
   ceiling is about 6.5× here.
 - **Building is about 40% of the work** (5 s of 13 s), mostly flex-pse
   building the tariff's cost terms. A pool of Ray actors that keep built
-  models (D13, deferred) would only help tasks that share a structure, such as
+  models (deferred) would only help tasks that share a structure, such as
   a price sweep. Configuration and surrogate sweeps change the model, so each
   needs its own build anyway. We keep it deferred.
 - **Memory** is about 0.4–0.5 GB per worker for a month at 15-minute steps.
@@ -112,4 +111,4 @@ Findings:
   Windows, and this machine has no Docker. The per-tenant cluster templates
   (`deploy/ray/`) are written but not run. The exit criterion "the example
   runs against a 2-node per-tenant Ray cluster" waits for a Linux host with
-  Docker, together with the M6 tenant stack. Do the same benchmark there.
+  Docker. Do the same benchmark there.
