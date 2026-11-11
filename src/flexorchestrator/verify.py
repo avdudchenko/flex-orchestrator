@@ -37,9 +37,11 @@ def verify(orch: Any, studies: list[str] | None = None, samples: int = 5) -> dic
         samples: How many items of each kind to read in full and hash.
 
     Returns:
-        ``{"report", "checked_at", "samples", "studies": {study: {kind: {...}}},
-        "problems": [...]}``; a kind holds ``runs`` (``{status: count}``),
-        ``tags`` (sorted) and ``hashes`` (``{tag: {"run_id", "hash"}}``).
+        A dict with ``report``, ``checked_at``, ``samples``, ``problems`` (a
+        list) and ``studies``, which is
+        ``{study: {kind: {"runs", "tags", "hashes"}}}``. A kind holds ``runs``
+        (``{status: count}``), ``tags`` (sorted) and ``hashes``
+        (``{tag: {"run_id", "hash"}}``).
     """
     report: dict[str, Any] = {
         "report": REPORT,

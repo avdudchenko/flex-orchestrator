@@ -33,7 +33,7 @@ MANIFEST = "manifest"
 
 @dataclass(frozen=True)
 class StoredData:
-    """What :meth:`Orchestrator.store_data` stored.
+    """What :meth:`~flexorchestrator.Orchestrator.store_data` stored.
 
     Attributes:
         name: The dataset's name.

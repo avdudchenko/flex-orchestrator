@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, computed_field
 from flexorchestrator.errors import HookError
 
 SolveStatus = Literal["ok", "failed", "error"]
-"""How a solve ended: ``"ok"`` (optimal), ``"failed"`` (the solver finished
+"""How a solve ended. ``"ok"`` (optimal), ``"failed"`` (the solver finished
 without an optimal solution) or ``"error"`` (the solve raised)."""
 
 

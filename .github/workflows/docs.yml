@@ -1,0 +1,57 @@
+name: Documentation
+
+# Builds the docs on every pull request, failing on any warning (broken
+# cross-references included), and publishes them to GitHub Pages from main.
+# The build imports the package for autodoc, so it uses environment-dev.yml
+# (flex-pse and Acquirium are installed from git, not PyPI).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # A login shell activates the micromamba env in every step.
+    shell: bash -el {0}
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-dev.yml
+          cache-environment: true
+      - run: sphinx-build -W --keep-going -b html docs docs/_build/html
+      - run: touch docs/_build/html/.nojekyll
+      - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    name: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

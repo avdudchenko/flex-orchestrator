@@ -8,10 +8,10 @@ A plugin package exposes a :class:`Plugin` through the
 
 Being installed isn't enough to load: a plugin loads only when its name is in
 ``FLEXORCH_PLUGINS`` (comma-separated) or it is passed explicitly
-(``Orchestrator(plugins=[...])``), so each deployment enables its own set.
-Loading checks that the plugin's ``api_version`` range includes
-:data:`PLUGIN_API_VERSION`, and that no two plugins (or a plugin and a
-built-in) claim the same command or hook name, or both provide an
+(``Orchestrator(plugins=[...])``), so each deployment enables its own set. Loading
+checks that the plugin's ``api_version`` range includes
+:data:`~flexorchestrator.ext.plugins.PLUGIN_API_VERSION`, and that no two plugins (or a
+plugin and a built-in) claim the same command or hook name, or both provide an
 orchestrator subclass.
 """
 
@@ -43,15 +43,15 @@ class Plugin:
 
     Attributes:
         name: The plugin's name, as listed in ``FLEXORCH_PLUGINS``.
-        api_version: The :data:`PLUGIN_API_VERSION` range it supports, e.g.
-            ``">=1,<2"``.
+        api_version: The :data:`~flexorchestrator.ext.plugins.PLUGIN_API_VERSION` range
+            it supports, e.g. ``">=1,<2"``.
         commands: Commands it adds.
         hooks: Named hooks: ``{name: import string}`` registers that
             hook for every slot, ``{name: {"build": ..., "solve": ...}}``
             registers a set.
         orchestrator_cls: An :class:`~flexorchestrator.Orchestrator` subclass;
             :func:`create_orchestrator` builds it.
-        routers: FastAPI routers, mounted by the Phase 2 server at
+        routers: FastAPI routers, for a host app to mount at
             ``/ext/<name>``; the library keeps them and doesn't import FastAPI.
         on_startup: Called with the orchestrator once it is set up.
         on_shutdown: Called with the orchestrator when it closes.
@@ -142,7 +142,9 @@ def installed_plugins() -> list[str]:
 
 
 def check_api_version(plugin: Plugin) -> None:
-    """Check that ``plugin.api_version`` includes :data:`PLUGIN_API_VERSION`.
+    """Check that ``plugin.api_version`` includes the plugin API version.
+
+    That is :data:`~flexorchestrator.ext.plugins.PLUGIN_API_VERSION`.
 
     Raises:
         PluginError: If it doesn't, or the range can't be read.

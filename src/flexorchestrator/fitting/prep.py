@@ -4,7 +4,7 @@ X and y must share one index, and later time-series regressors need it
 regular and gap-free, so the selectors' frames are joined on their
 timestamps, optionally resampled, and their gaps dealt with. Every step is
 recorded with the fit, as is a sha256 of the prepared data
-(:func:`data_hash`): the same data gives the same hash on every run.
+(``data_hash()``): the same data gives the same hash on every run.
 """
 
 import hashlib
@@ -29,7 +29,7 @@ class Prepared:
         units: ``{column: Pyomo unit or None}`` for every column.
         steps: What was done, in order.
         provenance: Each selector's provenance, ``{"X": [...], "y": [...]}``.
-        data_hash: See :func:`data_hash`.
+        data_hash: See ``data_hash()``.
     """
 
     X: pd.DataFrame

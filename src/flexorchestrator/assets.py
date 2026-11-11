@@ -173,8 +173,8 @@ def collect_assets(
             files stores again unchanged. Without ``base_dir``.
 
     Returns:
-        The spec with each path replaced by its stored name, ``{pointer:
-        AssetRef}``, and ``{name: bytes}`` for every file.
+        The spec with each path replaced by its stored name, the references
+        as ``{pointer: AssetRef}``, and ``{name: bytes}`` for every file.
 
     Raises:
         SpecError: If a file can't be read (a missing file is never skipped),

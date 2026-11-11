@@ -4,15 +4,17 @@
 with keyword arguments after the event. A listener that raises propagates: the
 item is already stored by then, so nothing is undone.
 
-| Event | Keyword arguments |
-|---|---|
-| ``study_created`` | ``study`` |
-| ``spec_stored`` | ``item`` (a ``StoreItem``) |
-| ``result_stored`` | ``item`` |
-| ``data_stored`` | ``item`` |
-| ``fit_stored`` | ``item`` |
-| ``job_finished`` | ``job`` (an ``execute_study`` summary) |
-| ``command_finished`` | ``name``, ``status`` (``succeeded``/``failed``), ``error`` |
+==================== ==========================================================
+Event                Keyword arguments
+==================== ==========================================================
+``study_created``    ``study``
+``spec_stored``      ``item`` (a ``StoreItem``)
+``result_stored``    ``item``
+``data_stored``      ``item``
+``fit_stored``       ``item``
+``job_finished``     ``job`` (an ``execute_study`` summary)
+``command_finished`` ``name``, ``status`` (``succeeded``/``failed``), ``error``
+==================== ==========================================================
 """
 
 from collections.abc import Callable
@@ -56,7 +58,8 @@ class EventBus:
         """Register ``fn`` for ``event``; without ``fn``, return a decorator.
 
         Raises:
-            PluginError: If ``event`` isn't one of :data:`EVENTS`.
+            PluginError: If ``event`` isn't one of
+                :data:`~flexorchestrator.ext.events.EVENTS`.
         """
         if event not in self._listeners:
             raise PluginError(f"Unknown event {event!r}; events are {list(EVENTS)}.")

@@ -25,7 +25,7 @@ def build(spec: dict, **overrides: Any) -> pyo.ConcreteModel:
     Args:
         spec: A ``FlowsheetSpec`` as JSON (schema ``0.1.1``; older specs migrate
             on load), or a ``DesignSpec``, which
-            :func:`~flexorchestrator.flexpse.design.build_design` builds.
+            :func:`~flexorchestrator.flexpse.build_design` builds.
         **overrides: Values to fix, keyed by variable path from the model root
             (see :func:`with_overrides`).
 

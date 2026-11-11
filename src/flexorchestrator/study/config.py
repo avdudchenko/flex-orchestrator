@@ -407,8 +407,9 @@ class StudyConfig(_Strict):
             omitted.
         base_model_spec: The model spec every task builds from, unless a
             ``spec_list`` sweep names others.
-        design: Run every task as a design study (:class:`DesignStudy`). Can't
-            be combined with ``model_inputs``.
+        design: Run every task as a design study
+            (:class:`~flexorchestrator.study.config.DesignStudy`). Can't be combined
+            with ``model_inputs``.
         fits: ``fit_surrogate`` parameters, run before the sweeps.
         model_inputs: Model variables every task sets from stored data:
             fit selectors, each column (after ``rename``) named by the path it
@@ -472,7 +473,7 @@ class StudyConfig(_Strict):
 
 
 def load_config(config: Any) -> StudyConfig:
-    """Return ``config`` as a :class:`StudyConfig`.
+    """Return ``config`` as a :class:`~flexorchestrator.study.StudyConfig`.
 
     Args:
         config: A ``StudyConfig``, a mapping, or the path of a YAML (``.yaml``,

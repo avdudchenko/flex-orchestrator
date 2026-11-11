@@ -146,7 +146,9 @@ def spread(
 
 
 def read_snapshot(table: pl.DataFrame | None, manifest: Mapping[str, Any]) -> ModelData:
-    """Rebuild :class:`ModelData` from a result's table and manifest.
+    """Rebuild a result's :class:`~flexorchestrator.export.ModelData`.
+
+    It is read from the result's table and manifest.
 
     Raises:
         StorageError: If the manifest's schema isn't one this version reads.

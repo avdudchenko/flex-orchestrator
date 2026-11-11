@@ -132,7 +132,9 @@ class SolveNotOptimal(Exception):  # noqa: N818 (recorded as the run's error typ
 
 @dataclass
 class StoreItem:
-    """An item about to be stored, as :meth:`Orchestrator.before_store` sees it.
+    """An item about to be stored, as ``before_store`` sees it.
+
+    See :meth:`~flexorchestrator.Orchestrator.before_store`.
 
     Attributes:
         kind: ``"result"``, ``"data"``, ``"model_spec"``, ``"surrogate_spec"``
@@ -229,7 +231,7 @@ class ResultHandle(results.ResultReads):
         """Return the timeseries as one table, a column per key.
 
         polars gets a ``time`` column first, pandas a UTC index. Scalars are in
-        :meth:`scalars`.
+        :meth:`~flexorchestrator.results.ResultReads.scalars`.
 
         Args:
             frame: ``"polars"`` or ``"pandas"``; the orchestrator's default if
@@ -553,8 +555,9 @@ class Orchestrator:
     def register_hooks(self, name: str, **hooks: Any) -> HookSet:
         """Register a named set of hooks, e.g. ``build=my_build``.
 
-        A :class:`HookSet` slot, or ``build(..., build="name")``, can then refer
-        to it by name. See :meth:`HookRegistry.register`.
+        A :class:`~flexorchestrator.hooks.HookSet` slot, or
+        ``build(..., build="name")``, can then refer to it by name. See
+        :meth:`~flexorchestrator.hooks.HookRegistry.register`.
         """
         return self.registry.register(name, **hooks)
 
@@ -2036,7 +2039,7 @@ def _version_of(dist: str) -> str | None:
 
 
 def _user() -> str | None:
-    """The user, from the environment (Phase 1; the token in Phase 2)."""
+    """The user: ``FLEXORCH_USER``, else the login name."""
     try:
         return os.environ.get("FLEXORCH_USER") or getpass.getuser()
     except (KeyError, OSError):

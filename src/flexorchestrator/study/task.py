@@ -4,15 +4,15 @@ A :class:`TaskSpec` is plain data (hooks as import strings or registered
 names), so it can be written to a dry-run plan. Running one has three steps,
 split so that a Ray worker needs only plain data and never the store:
 
-1. :func:`prepare` (main process) checks the tag, stores the derived spec if
-   the task has one, and reads the spec and its files into a :class:`Work`.
-2. :func:`execute` (in this process or on a worker) builds, solves and
-   exports, and returns a :class:`Done`: the outcome and the values.
-3. :func:`finish` (main process) maps the units and stores the result.
+1. ``prepare()`` (main process) checks the tag, stores the derived spec if
+   the task has one, and reads the spec and its files into a ``Work``.
+2. ``execute()`` (in this process or on a worker) builds, solves and
+   exports, and returns a ``Done``: the outcome and the values.
+3. ``finish()`` (main process) maps the units and stores the result.
 
-:func:`run_task` runs all three here, with retries; ``execute_study`` runs
-them on Ray when ``max_workers > 1``. Both store the same results, and both
-retry only :func:`execute`: a raising :func:`prepare` or :func:`finish` is a
+:func:`~flexorchestrator.study.run_task` runs all three here, with retries;
+``execute_study`` runs them on Ray when ``max_workers > 1``. Both store the same
+results, and both retry only ``execute()``: a raising ``prepare()`` or ``finish()`` is a
 storage problem, and the task ends as an ``error`` result at once.
 
 A task with configuration options or surrogates stores a derived model spec
@@ -109,7 +109,7 @@ class TaskSpec(BaseModel):
 
     @property
     def spec_tag(self) -> str:
-        """The model spec it builds: its own tag when it derives one."""
+        """The model spec it builds; its own tag when it derives one."""
         return self.tag if self.derives else self.base
 
     @property
@@ -170,7 +170,7 @@ class SpecBundle:
 
 @dataclass
 class Work:
-    """What :func:`execute` needs: plain data that pickles, no credentials.
+    """What ``execute()`` needs: plain data that pickles, no credentials.
 
     Attributes:
         task: The task.
@@ -198,12 +198,12 @@ class Work:
 
 @dataclass
 class Done:
-    """What :func:`execute` returns.
+    """What ``execute()`` returns.
 
     Attributes:
         outcome: How the solve ended; ``None`` if building raised.
         data: The exported values, for an ``ok`` solve. Their QUDT keys are
-            unverified: :func:`finish` maps the units again in the main process.
+            unverified: ``finish()`` maps the units again in the main process.
         error: The error, if building or exporting raised (with the
             traceback), a hook couldn't be resolved, or the Ray worker died.
         seconds: ``{"build", "solve", "export"}`` wall times.
@@ -224,7 +224,7 @@ def study_hooks(
     """The hooks a study's tasks use: runtime over config over the orchestrator's.
 
     Registered names are resolved here, with the orchestrator's registry:
-    :func:`execute` resolves hooks without one, in this process or on a worker.
+    ``execute()`` resolves hooks without one, in this process or on a worker.
 
     Args:
         orch: The orchestrator.
@@ -273,10 +273,10 @@ def prepare(orch: Any, task: TaskSpec, hooks: HookSet) -> Work:
     Args:
         orch: The orchestrator, with the task's study selected.
         task: The task.
-        hooks: The study's hooks (:func:`study_hooks`).
+        hooks: The study's hooks (``study_hooks()``).
 
     Returns:
-        The task's :class:`Work`, holding the spec and its files.
+        The task's ``Work``, holding the spec and its files.
 
     Raises:
         TagExistsError: If the result's tag (or a different derived spec) is
@@ -323,7 +323,7 @@ def execute(work: Work, bundle: SpecBundle | None = None) -> Done:
     returned as ``error``; a solve hook that raises gives an ``error`` outcome.
 
     Args:
-        work: From :func:`prepare`.
+        work: From ``prepare()``.
         bundle: The spec, if not in ``work`` (Ray sends it once per spec).
     """
     bundle = bundle or work.bundle
@@ -361,7 +361,7 @@ def execute(work: Work, bundle: SpecBundle | None = None) -> Done:
 
 
 def finish(orch: Any, work: Work, done: Done, attempts: int) -> TaskResult:
-    """Store what :func:`execute` returned; runs in the main process.
+    """Store what ``execute()`` returned; runs in the main process.
 
     A task whose build raised stores nothing. Otherwise the outcome is stored
     (a failed run for a solve that isn't optimal), with the values for an
@@ -369,8 +369,8 @@ def finish(orch: Any, work: Work, done: Done, attempts: int) -> TaskResult:
 
     Args:
         orch: The orchestrator.
-        work: The task's :class:`Work`, from :func:`prepare`.
-        done: What :func:`execute` returned.
+        work: The task's ``Work``, from ``prepare()``.
+        done: What ``execute()`` returned.
         attempts: How many times the task was executed.
 
     Returns:
@@ -429,7 +429,7 @@ def run_task(
     retries: int = 0,
     hooks: HookSet | None = None,
 ) -> TaskResult:
-    """Run one task in this process: :func:`prepare`, :func:`execute`, :func:`finish`.
+    """Run one task in this process: ``prepare()``, ``execute()``, ``finish()``.
 
     Args:
         orch: The orchestrator, with the task's study selected.
@@ -438,7 +438,7 @@ def run_task(
         retries: Executes it again this many times when building or exporting
             raises, or the solve hook raised (an ``error`` outcome). Reading or
             storing its spec, and storing its result, aren't retried.
-        hooks: The resolved hooks (:func:`study_hooks`), instead of ``runtime``.
+        hooks: The resolved hooks (``study_hooks()``), instead of ``runtime``.
 
     Returns:
         The result; an exception becomes an ``error`` result, so one task
@@ -489,7 +489,7 @@ def report(
 
 
 def errored(task: TaskSpec, error: str, attempts: int) -> TaskResult:
-    """The ``error`` result of a task that raised outside :func:`execute`."""
+    """The ``error`` result of a task that raised outside ``execute()``."""
     return TaskResult(
         index=task.index,
         tag=task.tag,

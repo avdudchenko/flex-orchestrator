@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- Documentation, built with Sphinx (`docs/`) and published to GitHub Pages
+  from main: installation, a quick start, explanations of connecting,
+  studies, storage, Ray, embedding and extending, and the API reference.
+  The build fails on any warning, broken cross-references included.
 - Ready to embed in a host application:
   - A long-lived local Acquirium: `flex-orch [--data-dir D] acquirium start
     [--config acquirium.toml] [--port P] | status | stop`

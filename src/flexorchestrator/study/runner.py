@@ -1,14 +1,16 @@
-"""The built-in ``execute_study`` command: run a :class:`StudyConfig`.
+"""The built-in ``execute_study`` command, which runs a study config.
 
-1. The config is expanded into tasks (:func:`expand`): the sweeps' values are
-   combined (``product`` or ``zip``) and each combination's tag is rendered
-   from ``output_name``. Repeated or invalid tags fail here, before anything
+The config is a :class:`~flexorchestrator.study.StudyConfig`.
+
+1. The config is expanded into tasks (:func:`~flexorchestrator.study.expand`): the
+   sweeps' values are combined (``product`` or ``zip``) and each combination's tag is
+   rendered from ``output_name``. Repeated or invalid tags fail here, before anything
    runs; ``dry_run`` stops here and returns the plan.
 2. With ``on_existing: error``, every task's tag is checked; a stored one
    raises before anything runs.
 3. ``fits`` run (``fit_surrogate``), so the sweeps can use their surrogates.
 4. The tasks run: one after another in this process
-   (:func:`~flexorchestrator.study.task.run_task`), or with
+   (:func:`~flexorchestrator.study.run_task`), or with
    ``max_workers > 1`` on Ray (:func:`flexorchestrator.parallel.run_tasks`),
    where workers build and solve and this process stores. Either way the
    stored results are the same.
@@ -127,8 +129,9 @@ def execute_study(
         What ran, or with ``dry_run`` the plan.
 
     Raises:
-        StudyConfigError: If the config doesn't expand (see :func:`expand`), or
-            combines a design study with something it can't run with.
+        StudyConfigError: If the config doesn't expand (see
+            :func:`~flexorchestrator.study.expand`), or combines a design study with
+            something it can't run with.
         SpecError: If flex-pse rejects the config's design.
         TagExistsError: With ``on_existing: error``, if a tag is stored.
         HookError: If a hook can't be resolved, or can't run on Ray.

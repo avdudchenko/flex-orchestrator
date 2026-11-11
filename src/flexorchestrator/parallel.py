@@ -1,10 +1,10 @@
 """Running a study's tasks, and a fit's variants, on Ray.
 
 ``max_workers > 1`` sends work here. The main process keeps the store: it
-prepares each task (:func:`~flexorchestrator.study.task.prepare`), Ray
-workers build, solve and export (:func:`~flexorchestrator.study.task.execute`),
+prepares each task (``study.task.prepare``), Ray
+workers build, solve and export (``study.task.execute``),
 and a ``ray.wait`` loop in the main process stores each result as it arrives
-(:func:`~flexorchestrator.study.task.finish`). Workers get plain data and
+(``study.task.finish``). Workers get plain data and
 import strings, never a model, a connection or a credential.
 
 The loop keeps at most ``max_workers`` tasks running, kills a task that runs
@@ -121,13 +121,13 @@ def run_tasks(
     Args:
         orch: The orchestrator (main process).
         tasks: The :class:`~flexorchestrator.study.task.TaskSpec` s.
-        hooks: The portable hooks (:func:`~flexorchestrator.study.task.study_hooks`).
+        hooks: The portable hooks (``study.task.study_hooks``).
         execution: The config's :class:`~flexorchestrator.study.config.Execution`.
         workers: Tasks running at once.
         progress: Advanced after each task; cancellation is checked often.
 
     Raises:
-        TagExistsError: As :func:`~flexorchestrator.study.task.prepare`.
+        TagExistsError: As ``study.task.prepare``.
         CommandCancelled: If the command is cancelled; running tasks are
             cancelled first.
     """

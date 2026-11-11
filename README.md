@@ -5,8 +5,10 @@ process-model studies and stores everything they need and produce in
 [Acquirium](https://github.com/DataDrivenCPS/acquirium): model specs,
 operating data, surrogate fits and solved results. A study is a model spec
 plus sweeps (surrogates, variables, configuration options, cases). Each solve is stored as a run you can query,
-compare, export to disk, and import elsewhere. See [docs/](docs/) for the
-configuration and design notes.
+compare, export to disk, and import elsewhere.
+
+The documentation is at <https://flex-pse.github.io/flex-orchestrator/>,
+built from [docs/](docs/).
 
 ## Install
 

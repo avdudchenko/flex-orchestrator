@@ -1,6 +1,6 @@
 """Design studies as plain data: composing specs and reading their results.
 
-Nothing here imports flex-pse; :mod:`flexorchestrator.flexpse.design` builds them.
+Nothing here imports flex-pse; ``flexorchestrator.flexpse.design`` builds them.
 """
 
 from typing import Any

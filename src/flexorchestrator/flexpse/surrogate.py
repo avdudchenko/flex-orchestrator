@@ -38,8 +38,9 @@ def apply_surrogate(
         unit: The unit's element name, e.g. ``"demo.digester"``.
         surrogate_spec: A ``SurrogateSpec`` as JSON (``surrogate_type``,
             ``data``, optional ``provenance``).
-        relation: The unit's relation to replace, e.g. ``"biogas_relation"``.
-            ``None`` means flex-pse's default, :data:`DEFAULT_RELATION`.
+        relation: The unit's relation to replace, e.g. ``"biogas_relation"``. ``None``
+            means flex-pse's default,
+            :data:`~flexorchestrator.flexpse.surrogate.DEFAULT_RELATION`.
 
     Returns:
         The new spec.
@@ -86,7 +87,7 @@ def swap_surrogate(
         unit: The unit's element name, e.g. ``"demo.digester"``.
         surrogate_spec: A ``SurrogateSpec`` as JSON.
         relation: The relation to replace; ``None`` means
-            :data:`DEFAULT_RELATION`.
+            :data:`~flexorchestrator.flexpse.surrogate.DEFAULT_RELATION`.
 
     Raises:
         SpecError: If ``surrogate_spec`` is invalid, or ``model`` is a merged

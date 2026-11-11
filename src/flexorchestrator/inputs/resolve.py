@@ -2,7 +2,7 @@
 
 Runs in the main process, which holds the store; the values it returns are
 plain data a Ray worker builds with. Each entry's selector is loaded with the
-fit selectors (:func:`flexorchestrator.fitting.selectors.load`), then:
+fit selectors (``fitting.selectors.load``), then:
 
 1. its UTC timestamps go to the entry's ``timezone`` and lose it, since the
    model's time steps are the facility's naive wall clock;

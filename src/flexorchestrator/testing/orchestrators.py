@@ -28,7 +28,8 @@ def memory_orchestrator(
         study: A study to create and select; ``None`` for none.
         plugins: Plugins to load; their orchestrator subclass is built.
             ``FLEXORCH_PLUGINS`` is ignored, so tests don't depend on it.
-        hooks: The hooks; :data:`FAKE_HOOKS` by default.
+        hooks: The hooks; :data:`~flexorchestrator.testing.orchestrators.FAKE_HOOKS` by
+            default.
         **kwargs: Passed to the orchestrator.
 
     Example:

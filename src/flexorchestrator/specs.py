@@ -55,9 +55,9 @@ VALIDATORS: dict[str, tuple[str, str]] = {
     FLEXPSE_SURROGATE: ("flexops", "flexorchestrator.flexpse:validate_surrogate_spec"),
     FLEXPSE_DESIGN: ("flexdesign", "flexorchestrator.flexpse:validate_design_spec"),
 }
-"""dict: Format family -> (module that must be importable, validator import
-string). A validator takes the spec, raises :class:`SpecError` if it is invalid,
-and returns it normalised: validated and dumped back to JSON, so defaults are
+"""dict: Format family -> (module that must be importable, validator import string). A
+validator takes the spec, raises :class:`~flexorchestrator.errors.SpecError` if it is
+invalid, and returns it normalised: validated and dumped back to JSON, so defaults are
 written out and every way of building the same spec stores (and hashes) the same
 JSON."""
 

@@ -1,7 +1,7 @@
 """The parameters of ``fit_surrogate``, as JSON-friendly pydantic models.
 
 The same parameters arrive from Python, the CLI, a study config's ``fits:``
-section and (Phase 2) HTTP, so every field is plain JSON.
+section and a host app's HTTP API, so every field is plain JSON.
 """
 
 from datetime import datetime

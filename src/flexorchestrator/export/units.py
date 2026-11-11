@@ -11,13 +11,12 @@ and the denominator parts::
     kWh       -> kilo+watt_hour            -> KiloW-HR
     J/(kg*K)  -> joule, kilo+gram^-1, K^-1 -> J-PER-KiloGM-K
 
-Only base units need a QUDT symbol: :data:`BASE_UNITS` holds the common ones, a
-currency ``XYZ`` becomes ``CCY_XYZ``, and any other base is looked up through
-the ``resolver``. With a resolver (Acquirium's ``resolve_unit``), every
-generated key is **verified**: it must exist in QUDT with the same SI
-multiplier as the Pyomo unit, which also guards against text matches like
-Pyomo's ``"a"`` (a year) resolving to QUDT's ``ARE`` (an area). Without one,
-keys are generated but unverified.
+Only base units need a QUDT symbol: :data:`~flexorchestrator.export.units.BASE_UNITS`
+holds the common ones, a currency ``XYZ`` becomes ``CCY_XYZ``, and any other base is
+looked up through the ``resolver``. With a resolver (Acquirium's ``resolve_unit``),
+every generated key is **verified**: it must exist in QUDT with the same SI multiplier
+as the Pyomo unit, which also guards against text matches like Pyomo's ``"a"`` (a year)
+resolving to QUDT's ``ARE`` (an area). Without one, keys are generated but unverified.
 
 User ``overrides`` always win. A unit no key can be found for is kept with
 ``qudt=None`` and a warning, or raises :class:`~flexorchestrator.errors.UnitError`
@@ -104,7 +103,7 @@ class UnitMapping:
 
     @property
     def verified(self) -> bool:
-        """Whether the key is known to be right: confirmed in QUDT, or the user's."""
+        """Whether the key is known to be right (confirmed in QUDT, or the user's)."""
         return self.source in ("override", "verified", "resolver")
 
 
@@ -113,11 +112,13 @@ class UnitMapper:
 
     Args:
         overrides: ``{pyomo unit: QUDT key}``, checked first, by exact string.
-        resolver: Optional QUDT lookup (see :data:`Resolver`). With it, keys are
-            verified and unlisted base units are found.
-        strict: Raise :class:`UnitError` for a unit no key is found for, instead
-            of warning and returning ``qudt=None``.
-        base_units: Base-unit symbols; defaults to :data:`BASE_UNITS`.
+        resolver: Optional QUDT lookup (see
+            :data:`~flexorchestrator.export.units.Resolver`). With it, keys are verified
+            and unlisted base units are found.
+        strict: Raise :class:`~flexorchestrator.errors.UnitError` for a unit no key is
+            found for, instead of warning and returning ``qudt=None``.
+        base_units: Base-unit symbols; defaults to
+            :data:`~flexorchestrator.export.units.BASE_UNITS`.
 
     Example:
         >>> UnitMapper().map("L/day").qudt
@@ -326,9 +327,9 @@ _QUDT_TERM = re.compile(
 def qudt_to_pyomo(key: str) -> str | None:
     """Return a Pyomo unit string for a QUDT key, by the rule :class:`UnitMapper` uses.
 
-    The reverse of key generation: each ``-``-separated part is a prefix, a
-    base symbol from :data:`BASE_UNITS` (or ``CCY_<code>``) and an exponent,
-    and ``-PER-`` starts the denominator. ``W-HR`` comes back as
+    The reverse of key generation: each ``-``-separated part is a prefix, a base symbol
+    from :data:`~flexorchestrator.export.units.BASE_UNITS` (or ``CCY_<code>``) and an
+    exponent, and ``-PER-`` starts the denominator. ``W-HR`` comes back as
     ``watt*hour``, which is the same unit.
 
     Args:

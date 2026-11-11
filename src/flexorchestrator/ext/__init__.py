@@ -1,7 +1,8 @@
 """The extension API: commands, plugins and lifecycle events.
 
-- :func:`command` makes a function a :class:`Command`, callable from Python
-  (``orch.run_command``), the CLI (``flex-orch cmd``) and, in Phase 2, HTTP.
+- :func:`~flexorchestrator.ext.command` makes a function a :class:`Command`, callable
+  from Python (``orch.run_command``), the CLI (``flex-orch cmd``) and a host app's HTTP
+  API.
 - A :class:`Plugin` bundles commands, named hooks, listeners and an
   orchestrator subclass; :func:`create_orchestrator` builds an orchestrator with
   the enabled plugins.

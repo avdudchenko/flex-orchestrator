@@ -33,7 +33,7 @@ Role = Literal["input", "output"]
 VariableKind = Literal["timeseries", "scalar", "json", "table", "file"]
 RunStatus = Literal["running", "succeeded", "failed"]
 Row = tuple[datetime, float]
-"""One timeseries sample: ``(timestamp, value)``."""
+"""One timeseries sample, ``(timestamp, value)``."""
 
 
 @dataclass(frozen=True)
@@ -152,10 +152,10 @@ class StorageBackend(Protocol):
     def record(self, run_id: str, label: str, value: Any) -> None:
         """Record a value in a running run.
 
-        ``value`` is a list of :data:`Row` for a timeseries (every row with a
-        number), a number or ``None`` for a scalar, any JSON value for a JSON
-        variable, a polars DataFrame for a table, and a :class:`FileValue` for
-        a file.
+        ``value`` is a list of :data:`~flexorchestrator.backend.base.Row` for a
+        timeseries (every row with a number), a number or ``None`` for a scalar, any
+        JSON value for a JSON variable, a polars DataFrame for a table, and a
+        :class:`FileValue` for a file.
 
         Raises:
             StorageError: If the run isn't running, ``label`` isn't declared, or
@@ -268,7 +268,9 @@ def to_utc(when: Any) -> datetime:
 
 
 def to_rows(timestamps: Sequence[Any], values: Sequence[float | None]) -> list[Row]:
-    """Pair timestamps with values as UTC :data:`Row` samples.
+    """Pair timestamps with values as UTC samples.
+
+    Each sample is a :data:`~flexorchestrator.backend.base.Row`.
 
     A missing value (``None``) is left out: a timeseries has no sample there.
 

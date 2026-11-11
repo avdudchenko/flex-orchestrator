@@ -34,7 +34,7 @@ class StudyManifest(_File):
         exported_at: When (UTC, ISO 8601).
         exported_by: Who (``FLEXORCH_USER`` or the login name).
         tenant: The tenant the study belongs to; ``None`` outside a tenant
-            stack (Phase 1).
+            stack.
         versions: flex-orchestrator, flex-pse and Acquirium versions.
         counts: How many files each part has.
         options: The options the export was made with.

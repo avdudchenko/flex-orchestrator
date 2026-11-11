@@ -1,12 +1,12 @@
 """Commands: named, validated operations on an orchestrator.
 
-A command is a function ``fn(orch, params, progress, **runtime) -> result``
-whose ``params`` argument is a pydantic model (a command that needs neither
-may take only ``orch``, or ``orch`` and ``params``). :func:`command` turns it into a
-:class:`Command`, and one definition is then callable from Python
+A command is a function ``fn(orch, params, progress, **runtime) -> result`` whose
+``params`` argument is a pydantic model (a command that needs neither may take only
+``orch``, or ``orch`` and ``params``). :func:`~flexorchestrator.ext.command` turns it
+into a :class:`Command`, and one definition is then callable from Python
 (``orch.run_command("price_sweep", prices=[0.1])``), from the CLI
-(``flex-orch cmd price_sweep --prices 0.1``) and, in Phase 2, over HTTP, with
-the same JSON parameters.
+(``flex-orch cmd price_sweep --prices 0.1``) and from a host app's HTTP API, with the
+same JSON parameters.
 
 ``runtime`` carries what JSON can't: callables such as a ``build`` hook passed
 from Python. It is never recorded, apart from the hooks' import strings.
@@ -39,7 +39,7 @@ RESULT = "result"
 """str: The label of a command run's JSON output holding what it returned."""
 
 Role = Literal["viewer", "editor", "owner"]
-"""The least role that may run a command over HTTP (enforced in Phase 2)."""
+"""The least role that may run a command over HTTP (the host app enforces it)."""
 
 
 class NoParams(BaseModel):
@@ -54,8 +54,8 @@ class Command:
         name: The command's unique name.
         fn: ``fn(orch, params, progress, **runtime) -> result``.
         params_model: The pydantic model its parameters are checked against.
-        role: The least role that may run it over HTTP (Phase 2).
-        long_running: Whether HTTP sends it through the job queue (Phase 2).
+        role: The least role that may run it over HTTP.
+        long_running: Whether HTTP sends it through a job queue.
         description: One line for ``--help`` and the OpenAPI schema; the first
             line of the function's docstring by default.
     """
@@ -119,8 +119,8 @@ def command(
 
     Args:
         name: The command's name; the function's name by default.
-        role: The least role that may run it over HTTP (Phase 2).
-        long_running: Whether HTTP sends it through the job queue (Phase 2).
+        role: The least role that may run it over HTTP.
+        long_running: Whether HTTP sends it through a job queue.
         params: The params model; by default the annotation of the function's
             second parameter, or :class:`NoParams` if it has none.
         description: One line of help; the docstring's first line by default.
@@ -175,7 +175,7 @@ class Progress:
     """Progress reports and cancellation for one command call.
 
     A command calls :meth:`update` as it goes and :meth:`check` between steps;
-    whoever runs it (a caller, the CLI, the Phase 2 job queue) reads
+    whoever runs it (a caller, the CLI, a host app's job queue) reads
     :meth:`snapshot` and may :meth:`cancel` it.
 
     Args:

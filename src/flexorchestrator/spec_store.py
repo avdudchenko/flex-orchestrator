@@ -19,7 +19,8 @@ from flexorchestrator.errors import SpecError
 from flexorchestrator.specs import SpecRecord
 
 SPEC_RECORD = "spec_record"
-"""str: The label of a spec run's JSON input holding the :class:`SpecRecord`."""
+"""str: The label of a spec run's JSON input holding the
+:class:`~flexorchestrator.specs.SpecRecord`."""
 
 
 def write(
