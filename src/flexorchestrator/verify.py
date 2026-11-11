@@ -49,6 +49,9 @@ def verify(orch: Any, studies: list[str] | None = None, samples: int = 5) -> dic
         "problems": [],
     }
     for study in studies if studies is not None else orch.studies():
+        if not orch.backend.has_study(study):
+            report["problems"].append(f"study {study!r} doesn't exist")
+            continue
         report["studies"][study] = _study(orch, study, samples, report["problems"])
     return report
 
@@ -56,9 +59,10 @@ def verify(orch: Any, studies: list[str] | None = None, samples: int = 5) -> dic
 def compare(before: dict, after: dict) -> list[str]:
     """Return how ``after`` differs from ``before``; ``[]`` if it doesn't.
 
-    Compares the studies, each kind's run counts and tags, and the hashes of
-    items sampled in both. Run ids aren't compared, so a copy (an import, a
-    move to another store) matches its original. ``checked_at`` and the
+    Compares the studies, each kind's succeeded runs and tags, and the hashes
+    of items sampled in both. Run ids aren't compared, nor failed or running
+    runs (an export copies only what succeeded), so a copy (an import, a move
+    to another store) matches its original. ``checked_at`` and the
     problems lists aren't compared: :func:`verify` reports problems on its
     own.
     """
@@ -74,8 +78,9 @@ def compare(before: dict, after: dict) -> list[str]:
         for kind in sorted(set(old[study]) | set(new[study])):
             was, now = old[study].get(kind, _EMPTY), new[study].get(kind, _EMPTY)
             where = f"{study} {kind}"
-            if was["runs"] != now["runs"]:
-                differences.append(f"{where}: runs {was['runs']} -> {now['runs']}")
+            done = (was["runs"].get("succeeded", 0), now["runs"].get("succeeded", 0))
+            if done[0] != done[1]:
+                differences.append(f"{where}: succeeded runs {done[0]} -> {done[1]}")
             lost = sorted(set(was["tags"]) - set(now["tags"]))
             gained = sorted(set(now["tags"]) - set(was["tags"]))
             if lost:

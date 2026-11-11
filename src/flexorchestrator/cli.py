@@ -238,8 +238,16 @@ def _run(orch: Any, args: argparse.Namespace, rest: list[str]) -> Any:
 
         report = verify(orch, args.study, args.samples)
         if args.against is not None:
-            with open(args.against, encoding="utf-8") as file:
-                report["differences"] = compare(json.load(file), report)
+            try:
+                with open(args.against, encoding="utf-8") as file:
+                    before = json.load(file)
+                differences = compare(before, report)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise FlexOrchestratorError(
+                    f"Can't compare with {args.against}: it isn't a verify "
+                    f"report ({type(exc).__name__}: {exc})."
+                ) from None
+            report["differences"] = differences
         report["ok"] = not report["problems"] and not report.get("differences")
         return report
     cmd = orch.commands.get(args.name)

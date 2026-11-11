@@ -285,7 +285,9 @@ class AcquiriumBackend:
         if not refs:
             return info
         for row in self._measurements(ref=list(info)):
-            found = info[row["ref_uri"]]
+            found = info.get(row["ref_uri"])
+            if found is None:  # a stream of a matched point that wasn't asked for
+                continue
             found["name"] = found["name"] or row["ref_name"]
             found["label"] = found["label"] or row["point_label"]
             if row["unit"] and not found["unit"]:

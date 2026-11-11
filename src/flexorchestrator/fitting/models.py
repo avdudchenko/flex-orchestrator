@@ -197,8 +197,8 @@ class FitParams(_Strict):
             or ``replace`` it.
         store_series: Also store ``actual`` / ``fitted`` / ``residual``
             timeseries with the fit, for plotting.
-        max_workers: Variants fitted at once; more than 1 fits them on Ray
-           . In a study, the study's ``execution`` decides instead.
+        max_workers: Variants fitted at once; more than 1 fits them on Ray.
+            In a study, the study's ``execution`` decides instead.
         ray_address: The Ray cluster for ``max_workers > 1``; local Ray if
             ``None``.
     """

@@ -303,10 +303,11 @@ class Orchestrator:
         study: A study to select; it must exist.
         data_dir: The managed Acquirium's directory (modes 1 and 2).
         db: A Postgres URL without a password (mode 2).
-        acquirium_url: A running Acquirium (mode 3). With no ``backend``,
-            ``data_dir``, ``db`` or ``acquirium_url``, ``FLEXORCH_ACQUIRIUM_URL``
-            (from ``environ``) selects mode 3: how a container or a host
-            application points the library at its Acquirium.
+        acquirium_url: A running Acquirium (mode 3). ``FLEXORCH_ACQUIRIUM_URL``
+            (from ``environ``) selects it for the whole process, which is how a
+            container or a host application points the library at its
+            Acquirium; while it's set, passing another store raises (see
+            :func:`~flexorchestrator.connection.connect`).
         db_credentials: An explicit Postgres login, for developers and tests.
         hooks: Hooks that replace the flex-pse defaults, slot by slot.
         registry: Where registered hook names resolve.
@@ -372,9 +373,7 @@ class Orchestrator:
         self.connection: Connection | None = None
         self.user: str | None = None
         self._handle = False
-        if backend is None and all(a is None for a in (data_dir, db, acquirium_url)):
-            env = os.environ if environ is None else environ
-            acquirium_url = env.get("FLEXORCH_ACQUIRIUM_URL") or None
+        self._root = self  # the orchestrator a study handle came from
         if backend is None:
             self.connection = connect(
                 data_dir=data_dir,
@@ -564,7 +563,8 @@ class Orchestrator:
 
         Deletes the study and its ledgers (results, datasets, specs and fits)
         with their declarations in Acquirium. If it is the
-        selected study, none is selected afterwards.
+        selected study, none is selected afterwards, here and on the
+        orchestrator a study handle came from; other handles to it then fail.
 
         Raises:
             StorageError: If deletion is turned off, or a run in the study is
@@ -589,8 +589,9 @@ class Orchestrator:
         cache = self._spec_cache
         for key in [k for k in cache or {} if k[0] == name]:
             del cache[key]
-        if self._study == name:
-            self._study = None
+        for orch in {id(self): self, id(self._root): self._root}.values():
+            if orch._study == name:
+                orch._study = None
 
     def delete(self, kind: str, tag: str) -> int:
         """Delete a stored item, for good: every run with this kind and tag.
@@ -1298,8 +1299,8 @@ class Orchestrator:
             spec: The model spec the values came from; see
                 :meth:`store_model_results`.
             overrides: The build overrides used with ``spec``.
-            model_inputs: Where the model inputs among ``overrides`` came from
-               , recorded with ``spec``.
+            model_inputs: Where the model inputs among ``overrides`` came from,
+                recorded with ``spec``.
 
         Returns:
             What was stored.

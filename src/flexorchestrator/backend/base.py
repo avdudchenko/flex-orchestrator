@@ -216,11 +216,11 @@ class StorageBackend(Protocol):
 class StreamStore(Protocol):
     """Optional: a backend that also reads the general store's streams.
 
-     Streams outside the experiment ledger (a plant historian's, say) are what
-     the ``ref_uris``, ``streams``, ``resolve`` and ``sparql`` fit selectors read
-    . The
-     Acquirium backend has them; the memory backend doesn't. This protocol
-     documents the methods; the selectors check for them with ``hasattr``.
+    Streams outside the experiment ledger (a plant historian's, say) are what
+    the ``ref_uris``, ``streams``, ``resolve`` and ``sparql`` fit selectors
+    read. The Acquirium backend has them; the memory backend doesn't. This
+    protocol documents the methods; the selectors check for them with
+    ``hasattr``.
     """
 
     def stream_rows(self, ref: str, start: Any = None, end: Any = None) -> list[Row]:

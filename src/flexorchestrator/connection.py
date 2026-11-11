@@ -11,6 +11,11 @@ from its arguments:
 3. **remote** (``acquirium_url=``): a running Acquirium, which owns its own
    database secret.
 
+``FLEXORCH_ACQUIRIUM_URL`` selects mode 3 for a whole process, so a container
+or host application points the library at its Acquirium without code. While
+it's set, the store isn't chosen in code: passing ``data_dir``, ``db`` or a
+different ``acquirium_url`` raises.
+
 A managed server lives as long as the first process that opened its
 ``data_dir``. If a long-lived one is running there (``flex-orch acquirium
 start``, :mod:`flexorchestrator.service`), modes 1 and 2 attach to it instead
@@ -126,17 +131,18 @@ def connect(
         db: A Postgres URL or conninfo string **without a password**; selects
             mode 2.
         acquirium_url: A running Acquirium, e.g. ``"http://acquirium:8000"``;
-            selects mode 3.
+            selects mode 3. ``FLEXORCH_ACQUIRIUM_URL`` sets it too.
         db_credentials: An explicit login for mode 2, for developers and tests.
         exact_only: Start the managed server without text-matching indexes.
         timeout: Seconds to wait for the server.
-        environ: Where the ``FLEXORCH_DB_*`` credentials and
-            ``FLEXORCH_START_ACQUIRIUM`` are read from; ``os.environ`` by
-            default. libpq's own ``PG*`` variables and ``~/.pgpass`` are always
-            read from the process.
+        environ: Where ``FLEXORCH_ACQUIRIUM_URL``, the ``FLEXORCH_DB_*``
+            credentials and ``FLEXORCH_START_ACQUIRIUM`` are read from;
+            ``os.environ`` by default. libpq's own ``PG*`` variables and
+            ``~/.pgpass`` are always read from the process.
 
     Raises:
-        ValueError: For arguments that mix modes, or a password in ``db``.
+        ValueError: For arguments that mix modes, a password in ``db``, or a
+            store argument while ``FLEXORCH_ACQUIRIUM_URL`` names another.
         DBAuthError: If Postgres refuses the login.
         StorageError: If a check before starting fails (see :func:`preflight`),
             or ``FLEXORCH_START_ACQUIRIUM=0`` and no long-lived server is
@@ -145,6 +151,7 @@ def connect(
     Example:
         >>> connect(acquirium_url="http://acquirium:8000")  # doctest: +SKIP
     """
+    acquirium_url = _url_from_env(data_dir, db, acquirium_url, environ)
     if acquirium_url is not None:
         if db is not None or data_dir is not None or db_credentials is not None:
             raise ValueError(
@@ -196,6 +203,33 @@ def connect(
             env["PGPASSWORD"] = password.get_secret_value()
         client = _with_env(env, _init_config, config, timeout, password)
     return Connection("postgres", target, client, owned=True)
+
+
+def _url_from_env(
+    data_dir: str | Path | None,
+    db: str | None,
+    acquirium_url: str | None,
+    environ: Mapping[str, str] | None,
+) -> str | None:
+    """Return the Acquirium URL: ``FLEXORCH_ACQUIRIUM_URL`` if set, else the argument.
+
+    Raises:
+        ValueError: If the variable is set and the arguments name another store.
+    """
+    env = os.environ if environ is None else environ
+    url = env.get("FLEXORCH_ACQUIRIUM_URL") or None
+    if url is None:
+        return acquirium_url
+    given = [name for name, value in (("data_dir", data_dir), ("db", db)) if value]
+    if acquirium_url is not None and acquirium_url != url:
+        given.append("acquirium_url")
+    if given:
+        raise ValueError(
+            f"FLEXORCH_ACQUIRIUM_URL is set ({url}), so this process uses that "
+            f"Acquirium; don't also pass {', '.join(given)}. Unset the variable "
+            "to choose the store in code."
+        )
+    return url
 
 
 def _long_lived(

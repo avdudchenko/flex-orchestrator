@@ -148,6 +148,7 @@ def start(
     while not _healthy(service.url):
         if process.poll() is not None or time.monotonic() > deadline:
             if process.poll() is None:
+                _terminate(process.pid)
                 process.kill()
             raise StorageError(
                 f"The Acquirium for {root} didn't start; its log ({log}) ends:\n"
@@ -177,8 +178,8 @@ def stop(data_dir: str | Path | None = None, timeout: float = 60.0) -> Service |
     """Stop the long-lived Acquirium for ``data_dir``; its data is kept.
 
     On Linux and macOS it's asked to stop (``SIGTERM``); Windows has no such
-    signal for a detached process, so it's ended, as Acquirium's own managed
-    server is.
+    signal for a detached process, so it's ended, with any process it started,
+    as Acquirium's own managed server is.
 
     Returns:
         What was stopped, or ``None`` if nothing was running.
@@ -189,10 +190,7 @@ def stop(data_dir: str | Path | None = None, timeout: float = 60.0) -> Service |
     root = _root(data_dir)
     service = find(root)
     if service is not None:
-        try:
-            os.kill(service.pid, signal.SIGTERM)
-        except OSError:
-            pass  # gone already
+        _terminate(service.pid)
         deadline = time.monotonic() + timeout
         while _healthy(service.url):
             if time.monotonic() > deadline:
@@ -248,6 +246,26 @@ def _detached() -> dict[str, Any]:
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         return {"creationflags": flags}
     return {"start_new_session": True}
+
+
+def _terminate(pid: int) -> None:
+    """Stop the process started as ``pid``, and on Windows its children too.
+
+    A venv's ``python.exe`` on Windows is a launcher that runs the server as
+    its child, so ending ``pid`` alone would leave the server answering.
+    """
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass  # gone already
 
 
 def _tail(path: Path, lines: int = 20) -> str:

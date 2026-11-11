@@ -247,7 +247,9 @@ def _stored_name(path: str, digest: str) -> str:
     return f"{ASSET_DIR}/{digest[:12]}-{Path(path).name}"
 
 
-_STORED = re.compile(rf"{ASSET_DIR}/[0-9a-f]{{12}}-[^/]+")
+# No separator of any platform (nor a drive colon) after the prefix: a kept
+# name is written under the build's directory by materialize_spec.
+_STORED = re.compile(rf"{ASSET_DIR}/[0-9a-f]{{12}}-[^/\\:]+")
 
 
 def materialize_spec(
@@ -279,7 +281,9 @@ def materialize_spec(
             raise SpecError(
                 f"The stored file {ref.name} is missing or doesn't match its hash."
             )
-        target = root / ref.name
+        target = (root / ref.name).resolve()
+        if not target.is_relative_to(root):
+            raise SpecError(f"The stored file name {ref.name!r} leaves {root}.")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         set_pointer(materialized, pointer, str(target))

@@ -29,7 +29,7 @@ Parallel execution needs Ray (the `ray` extra): `pip install -e ".[ray]"`.
 | --- | --- | --- |
 | local | `data_dir=".flexorch"` (the default) | A managed Acquirium with DuckDB. No credentials. |
 | Postgres | `db="postgresql://user@host/db"`, `data_dir=...` | The login comes from `FLEXORCH_DB_PASSWORD_FILE`, `FLEXORCH_DB_USER` / `FLEXORCH_DB_PASSWORD`, or libpq (`PGPASSWORD`, `~/.pgpass`). It never comes from code. |
-| remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. With no store argument at all, `FLEXORCH_ACQUIRIUM_URL` picks this mode, so a container needs no code to find its Acquirium. |
+| remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. `FLEXORCH_ACQUIRIUM_URL` picks this mode for the whole process, so a container needs no code to find its Acquirium; while it's set, passing another store raises. |
 
 ### A long-lived Acquirium
 

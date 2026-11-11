@@ -406,8 +406,32 @@ def test_the_orchestrator_connects_without_a_backend(monkeypatch):
     }
 
 
-def test_a_tenant_stack_points_the_orchestrator_at_its_acquirium(monkeypatch):
-    # A host sets FLEXORCH_ACQUIRIUM_URL; Orchestrator() then uses mode 3.
+URL = "http://acquirium:8000"
+STACK = {"FLEXORCH_ACQUIRIUM_URL": URL}
+
+
+def test_flexorch_acquirium_url_selects_mode_3(monkeypatch):
+    # A host sets FLEXORCH_ACQUIRIUM_URL; connect() and Orchestrator() use it.
+    seen = []
+    monkeypatch.setattr("acquirium.init", lambda **kw: seen.append(kw) or object())
+    assert connect(environ=STACK).mode == "remote"
+    assert connect(acquirium_url=URL, environ=STACK).target == URL  # the same one
+    assert [kw["address"] for kw in seen] == [URL, URL]
+
+
+@pytest.mark.parametrize(
+    "store",
+    [{"data_dir": "here"}, {"db": DB}, {"acquirium_url": "http://other:8000"}],
+)
+def test_another_store_while_flexorch_acquirium_url_is_set_raises(store):
+    name = next(iter(store))
+    with pytest.raises(ValueError, match=f"FLEXORCH_ACQUIRIUM_URL is set.*{name}"):
+        connect(**store, environ=STACK)
+    with pytest.raises(ValueError, match="FLEXORCH_ACQUIRIUM_URL is set"):
+        Orchestrator(**store, environ=STACK)
+
+
+def test_orchestrator_passes_its_environ_to_connect(monkeypatch):
     seen = []
 
     class Fake:
@@ -418,15 +442,12 @@ def test_a_tenant_stack_points_the_orchestrator_at_its_acquirium(monkeypatch):
             pass
 
     def fake_connect(**kwargs):
-        seen.append(kwargs["acquirium_url"])
+        seen.append(kwargs["environ"])
         return Fake()
 
     monkeypatch.setattr("flexorchestrator.orchestrator.connect", fake_connect)
-    stack = {"FLEXORCH_ACQUIRIUM_URL": "http://acquirium:8000"}
-    Orchestrator(environ=stack)
-    Orchestrator(environ={})
-    Orchestrator(data_dir="here", environ=stack)  # an explicit store wins
-    assert seen == ["http://acquirium:8000", None, None]
+    Orchestrator(environ=STACK)
+    assert seen == [STACK]
 
 
 def test_a_backend_and_connection_arguments_conflict():

@@ -11,8 +11,9 @@
     every script; while it runs, `Orchestrator(data_dir=)` attaches to it and
     never stops it. `FLEXORCH_START_ACQUIRIUM=0` makes the orchestrator fail
     rather than start a short-lived managed server.
-  - `FLEXORCH_ACQUIRIUM_URL`: `Orchestrator()` with no store argument connects
-    to that Acquirium (mode 3). An explicit argument wins.
+  - `FLEXORCH_ACQUIRIUM_URL` connects `Orchestrator()` and `connect()` to that
+    Acquirium (mode 3). While it's set, passing `data_dir`, `db` or another
+    `acquirium_url` raises, so the store is chosen in one place.
   - Study handles: `select_study`, `create_study` and `get_or_create_study`
     still select the study, and now return a handle fixed to it that shares the
     connection, so callers in several threads never see each other's selection.
@@ -24,8 +25,9 @@
   - `flex-orch verify [--study S ...] [--samples N] [--against FILE]`
     (`flexorchestrator.verify`): per study and kind, run counts, tags and
     hashes of a sample of values, and problems (a tag stored twice, runs left
-    running, unreadable values). `--against` an earlier report exits 1 on any
-    difference; a copy (an import, a move) matches its original.
+    running, unreadable values, a study that doesn't exist). `--against` an
+    earlier report exits 1 on any difference in succeeded runs, tags or
+    values; a copy (an import, a move) matches its original.
   - `python -m flexorchestrator` runs the CLI.
 - Design studies, built on flex-pse's `flexdesign`: size equipment once across
   every modeled year and representative month. Add a `design:` section to a study

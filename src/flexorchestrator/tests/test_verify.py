@@ -88,7 +88,10 @@ def test_differences_after_a_change(filled):
 def test_an_imported_copy_matches_apart_from_its_name(filled, tmp_path):
     """Exported, imported under a new name, the same report."""
     name = filled.study
+    failed = SolveOutcome(status="failed", termination="infeasible", solver="fake")
+    filled.store_model_data("c", cost(3.0), failed)  # an export leaves it out
     before = verify(filled, [name])
+    assert before["studies"][name]["result"]["runs"] == {"failed": 1, "succeeded": 2}
     filled.export_study(tmp_path / "export")
     copy = filled.import_study(tmp_path / "export", name=f"{name}-copy").study
     after = verify(filled, [copy])
@@ -141,6 +144,6 @@ def test_the_cli_compares_and_exits_1_on_a_difference(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is False
     assert report["differences"] == [
-        "s result: runs {'succeeded': 1} -> {}",
+        "s result: succeeded runs 1 -> 0",
         "s result: tags missing ['a']",
     ]

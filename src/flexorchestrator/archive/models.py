@@ -186,8 +186,7 @@ class ResultFile(_File):
         started_at: When its run started.
         model_spec_ref: ``{tag, spec_hash}`` of the spec it was built from.
         overrides: The build overrides.
-        model_inputs: Where the model inputs among ``overrides`` came from
-           .
+        model_inputs: Where the model inputs among ``overrides`` came from.
         hooks: The hooks that built and solved it.
         solve_outcome: How the solve ended.
         metadata: The run's metadata.

@@ -354,9 +354,8 @@ def test_published_schemas_are_current():
     folder = Path(__file__).parents[4] / "docs" / "schemas"
     for name, schema in schemas.all_schemas().items():
         path = folder / f"{name}.schema.json"
-        assert path.read_text(encoding="utf-8") == schemas.render(schema), (
-            f"{path} is stale; run python -m flexorchestrator.schemas"
-        )
+        stale = f"{path} is stale; run python -m flexorchestrator.schemas"
+        assert path.read_text(encoding="utf-8") == schemas.render(schema), stale
 
 
 def test_a_failed_export_leaves_nothing_behind(study, tmp_path, monkeypatch):

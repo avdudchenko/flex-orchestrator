@@ -40,6 +40,22 @@ def test_selecting_a_study_returns_a_handle_fixed_to_it(orch_backend, study_name
         orch.select_study(f"{study_name}-nope")
 
 
+def test_deleting_through_a_handle_clears_the_orchestrators_selection(
+    orch_backend, study_name
+):
+    orch = Orchestrator(orch_backend)
+    a = orch.create_study(study_name)
+    other = orch.select_study(study_name)
+    a.delete_study(study_name)
+    for gone in (orch, a):
+        with pytest.raises(StudyNotFoundError, match="No study is selected"):
+            _ = gone.study
+    # Another handle stays bound to the study, so using it fails.
+    with pytest.raises(Exception, match=study_name):
+        other.store_model_data("r", cost(1.0), OK)
+    assert not orch.backend.has_study(study_name)
+
+
 def test_closing_a_handle_leaves_the_connection_open(orch_backend, study_name):
     closed = []
 
