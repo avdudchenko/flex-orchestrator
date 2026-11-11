@@ -16,6 +16,16 @@ BACKEND_TIERS = {"memory": "unit", "files": "unit", "acquirium": "component"}
 HAS_FLEXPSE = importlib.util.find_spec("flexops") is not None
 
 
+def pytest_configure(config):
+    # Importing idaes creates ~/.idaes (and its bin/ and testing/ folders) by
+    # checking that each is missing and then calling mkdir. With pytest-xdist,
+    # the workers import it at the same time on a fresh machine (CI), and the
+    # losers fail collection with FileExistsError. Import it once here, in the
+    # main process, before any worker starts; a worker has ``workerinput``.
+    if not hasattr(config, "workerinput") and importlib.util.find_spec("idaes"):
+        import idaes  # noqa: F401
+
+
 def pytest_collection_modifyitems(config, items):
     errors = []
     for item in items:
