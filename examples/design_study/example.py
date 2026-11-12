@@ -10,8 +10,8 @@ import os
 import shutil
 from pathlib import Path
 
-from flex_orchestrator import Orchestrator
-from flex_orchestrator.backend import FileBackend
+from flexorchestrator import Orchestrator
+from flexorchestrator.backend import FileBackend
 
 HERE = Path(__file__).parent
 FOLDER = HERE / "on_disk"

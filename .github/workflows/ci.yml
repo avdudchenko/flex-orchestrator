@@ -1,6 +1,6 @@
 name: CI
 
-# PLAN.md §7 and D20: lint gates everything; unit and component run on Linux
+# Lint gates everything; unit and component run on Linux
 # and Windows, integration on Linux. Benchmarks are opt-in and don't run here.
 # The test jobs build environment-dev.yml, so they use the same pinned flex-pse,
 # Acquirium, solvers and tool versions as a developer's flex-orch-dev env.
@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 6 * * 1" # weekly, to catch upstream drift (PLAN.md §6)
+    - cron: "0 6 * * 1" # weekly, to catch upstream drift
   workflow_dispatch:
 
 concurrency:

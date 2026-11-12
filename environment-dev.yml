@@ -1,8 +1,8 @@
 # Development environment for flex-orchestrator.
 # flex-pse is the v0.3.0 release from git; to co-develop it, swap that line for
 # `-e ../flex-pse[parameterize,solvers,testing]`. Acquirium comes from git, pinned to
-# the same commit of main as environment.yml (it has the experiment/study API
-# since PR #78 merged; no release has it yet), never from a local checkout. Binary
+# the same commit of main as environment.yml (the experiment/study API came with
+# PR #78; no release on PyPI has it yet), never from a local checkout. Binary
 # solvers come from conda-forge; run
 # `idaes get-extensions` after creation for IPOPT.
 # Usage: conda env create -f environment-dev.yml
@@ -19,7 +19,7 @@ dependencies:
   - pytest-cov
   - pytest-timeout
   - pytest-xdist
-  # code style (D20): same versions as flex-pse's .pre-commit-config.yaml
+  # code style: same versions as flex-pse's .pre-commit-config.yaml
   - black=26.5.1
   - ruff=0.15.20
   - pre-commit
@@ -34,9 +34,9 @@ dependencies:
       - "flex-pse[parameterize,solvers,testing] @ git+https://github.com/flex-pse/flex-pse.git@v0.3.0"
       # Ray 2.60.0 crashes in ray.shutdown() on Windows; drop this once a newer one doesn't.
       - "ray<2.60"
-      # Acquirium main (PR #78 merged); keep in step with environment.yml
-      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@227e3f671b0c1b7fbbc83c0af27daa9994aa982d"
+      # Acquirium main (b7f6fc8, v0.4.0a9); keep in step with environment.yml
+      - "acquirium @ git+https://github.com/DataDrivenCPS/acquirium.git@b7f6fc8a764345dd172e9217cc25f255255493ad"
       # orchestrator server stack (FastAPI/uvicorn already come with acquirium)
       - httpx
-      # parallel execution (D13) uses ray, which already comes with acquirium
-      - -e .[dev]   # add the server extra in M7
+      # parallel execution uses ray, which already comes with acquirium
+      - -e .[dev]

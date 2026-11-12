@@ -23,7 +23,7 @@ import flexops as fo
 from common import MODEL, new_study, ro_model
 from sweep_nested import STUDY
 
-from flex_orchestrator import Orchestrator
+from flexorchestrator import Orchestrator
 
 WORKERS = max(2, (os.cpu_count() or 2) // 2)
 LIMITS = list(range(200, 320, 10))  # 12 withdrawal limits, in m³/hr

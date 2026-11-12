@@ -5,8 +5,10 @@ process-model studies and stores everything they need and produce in
 [Acquirium](https://github.com/DataDrivenCPS/acquirium): model specs,
 operating data, surrogate fits and solved results. A study is a model spec
 plus sweeps (surrogates, variables, configuration options, cases). Each solve is stored as a run you can query,
-compare, export to disk, and import elsewhere. See [PLAN.md](PLAN.md) for the
-design.
+compare, export to disk, and import elsewhere.
+
+The documentation is at <https://flex-pse.github.io/flex-orchestrator/>,
+built from [docs/](docs/).
 
 ## Install
 
@@ -29,15 +31,32 @@ Parallel execution needs Ray (the `ray` extra): `pip install -e ".[ray]"`.
 | --- | --- | --- |
 | local | `data_dir=".flexorch"` (the default) | A managed Acquirium with DuckDB. No credentials. |
 | Postgres | `db="postgresql://user@host/db"`, `data_dir=...` | The login comes from `FLEXORCH_DB_PASSWORD_FILE`, `FLEXORCH_DB_USER` / `FLEXORCH_DB_PASSWORD`, or libpq (`PGPASSWORD`, `~/.pgpass`). It never comes from code. |
-| remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. |
+| remote | `acquirium_url="http://acquirium:8000"` | A running Acquirium that holds its own database secret. `FLEXORCH_ACQUIRIUM_URL` picks this mode for the whole process, so a container needs no code to find its Acquirium; while it's set, passing another store raises. |
+
+### A long-lived Acquirium
+
+A managed Acquirium lives as long as the first script that opened its
+`data_dir`. One that has to keep running between scripts, for its drivers or
+data processing, is started on its own:
+
+```
+flex-orch --data-dir .flexorch acquirium start [--config acquirium.toml]
+flex-orch --data-dir .flexorch acquirium status
+flex-orch --data-dir .flexorch acquirium stop
+```
+
+While it runs, every `Orchestrator(data_dir=".flexorch")` attaches to it and
+leaves it running. `--config` serves your own `acquirium.toml`, drivers and
+all. Set `FLEXORCH_START_ACQUIRIUM=0` to make scripts fail instead of starting
+a short-lived one when it isn't running.
 
 ### Without Acquirium
 
 To keep studies in a folder on disk, with no server, pass a `FileBackend`:
 
 ```python
-from flex_orchestrator import Orchestrator
-from flex_orchestrator.backend import FileBackend
+from flexorchestrator import Orchestrator
+from flexorchestrator.backend import FileBackend
 
 with Orchestrator(FileBackend("runs")) as orch:
     ...
@@ -45,8 +64,8 @@ with Orchestrator(FileBackend("runs")) as orch:
 
 Everything works the same, Ray and export included. Each result is written
 when it's stored, so a crash loses only the task in progress. On the command
-line it's `flex-orch --files runs ...`. One process writes a folder at a time,
-and there is no Acquirium query API (`orch.acquirium`) or unit verification.
+line it's `flex-orch --files runs ...`. One process uses a folder at a time
+(its threads can share it), and there is no Acquirium query API (`orch.acquirium`) or unit verification.
 See [examples/ro_study/store_on_disk.py](examples/ro_study/store_on_disk.py).
 
 ## Quick start
@@ -56,7 +75,7 @@ which defines `operating_data`, `ro_model`, `UNITS`, `KEEP` and the fitted
 `linear` surrogate:
 
 ```python
-from flex_orchestrator import Orchestrator
+from flexorchestrator import Orchestrator
 
 with Orchestrator(data_dir=".flexorch") as orch:
     orch.create_study("ro_surrogates")
@@ -85,6 +104,32 @@ flex-orch --data-dir .flexorch import export/my_study --name copy
 [examples/ro_study/](examples/ro_study/README.md) has one script per sweep
 type. The config's JSON Schema is in [docs/schemas/](docs/schemas/).
 
+## Embedding in an application
+
+A service or app calls the library directly:
+
+- **One study per caller.** Selecting a study makes it the orchestrator's, and
+  also returns a handle fixed to it that shares the connection. A script keeps
+  using `orch`; code serving several callers at once keeps the handle, so one
+  caller's selection never reaches another's:
+
+  ```python
+  study = orch.select_study("example_a")   # or create_study / get_or_create_study
+  study.user = "alice"                     # recorded with what she stores
+  study.store_data("ops", frame)
+  ```
+
+- **Spec files as bytes.** `store_model_spec(tag, spec, files={"tariff.csv":
+  data})` takes the referenced files' bytes instead of reading them, and never
+  reads the disk; the result is the same as from disk, `spec_hash` included.
+  `model_spec(tag, with_files=True).files` gives them back.
+- **Checking a store.** `flex-orch verify > before.json` reports each study's
+  counts, tags and value hashes, and its problems; after a restore or a move,
+  `flex-orch verify --against before.json` exits 1 on any difference.
+- The study config and stored files have JSON Schemas in
+  [docs/schemas/](docs/schemas/), and long commands report progress and can be
+  cancelled.
+
 ## Running in parallel on Ray
 
 Set `execution.max_workers` (or pass `max_workers=` / `--workers`) above 1, and
@@ -100,4 +145,4 @@ limit). See [docs/decisions/0001-ray-execution.md](docs/decisions/0001-ray-execu
 - [examples/](examples/README.md): the RO examples and a sample plugin
   ([examples/plugins/ro_tools](examples/plugins/ro_tools/README.md)).
 - [benchmarking/](benchmarking/): Acquirium storage timings.
-- [CHANGELOG.md](CHANGELOG.md) and [PLAN.md](PLAN.md).
+- [CHANGELOG.md](CHANGELOG.md).

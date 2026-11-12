@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-flex-orch = "flex_orchestrator.cli:main"
+flex-orch = "flexorchestrator.cli:main"
 
 [project.optional-dependencies]
 # flex-pse is not on PyPI yet: the conda env files install it from a pinned git
@@ -24,7 +24,7 @@ flex-orch = "flex_orchestrator.cli:main"
 flexpse = ["flex-pse[parameterize,solvers]"]
 # The Acquirium backend; Acquirium (PR #78) is installed the same way as flex-pse.
 acquirium = ["acquirium", "requests"]
-# Parallel studies and fits (max_workers > 1, D13); Acquirium installs it too.
+# Parallel studies and fits (max_workers > 1); Acquirium installs it too.
 ray = ["ray>=2.59"]
 dev = [
     "pytest",
@@ -36,12 +36,12 @@ dev = [
     "black==26.5.1",
     "pre-commit",
 ]
-# The model data exporter (flex_orchestrator.export) needs pyomo; flex-pse brings it.
+# The model data exporter (flexorchestrator.export) needs pyomo; flex-pse brings it.
 pyomo = ["pyomo>=6.8"]
 docs = ["sphinx", "myst-parser", "furo"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/flex_orchestrator"]
+packages = ["src/flexorchestrator"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --import-mode=importlib"
@@ -59,13 +59,12 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["src/flex_orchestrator"]
+source = ["src/flexorchestrator"]
 # Tests live next to the code they test (src/**/tests/); don't count them.
 omit = ["*/tests/*"]
 
 [tool.ruff.lint]
-# flex-pse's rule set plus "D", so the docstring convention is actually enforced
-# (PLAN.md D20).
+# flex-pse's rule set plus "D", so the docstring convention is actually enforced.
 select = ["E", "F", "I", "B", "UP", "D"]
 pydocstyle.convention = "google"
 

@@ -15,7 +15,7 @@ against the stored one.
 
 from common import FITS, HERE, new_study, report
 
-from flex_orchestrator.archive import load_result
+from flexorchestrator.archive import load_result
 
 STUDY = {
     "base_model_spec": "base",

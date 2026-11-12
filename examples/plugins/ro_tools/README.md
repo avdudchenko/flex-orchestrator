@@ -1,6 +1,6 @@
 # ro_tools: a sample plugin
 
-A complete flex-orchestrator plugin (PLAN.md D18), with its own `pyproject.toml`
+A complete flex-orchestrator plugin, with its own `pyproject.toml`
 and tests. It provides:
 
 - a command, `cost_table`, that tabulates one scalar of every stored result;

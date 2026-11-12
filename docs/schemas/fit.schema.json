@@ -66,7 +66,7 @@
   },
   "$id": "https://flex-orchestrator/schemas/flexorch-export/1/fit.json",
   "additionalProperties": false,
-  "description": "``fits/<tag>.json``: one fit run (D19).\n\nAttributes:\n    tag: The fit's tag (its surrogate spec's).\n    run_id: Its run in ``<s>::fits``.\n    started_at: When it ran.\n    metadata: The run's metadata.\n    fit_params: The fit as planned.\n    training_data: What the data resolved to, and how it was prepared.\n    fit_result: Coefficients, metrics and diagnostics.\n    series: The fitted series, if stored.",
+  "description": "``fits/<tag>.json``: one fit run.\n\nAttributes:\n    tag: The fit's tag (its surrogate spec's).\n    run_id: Its run in ``<s>::fits``.\n    started_at: When it ran.\n    metadata: The run's metadata.\n    fit_params: The fit as planned.\n    training_data: What the data resolved to, and how it was prepared.\n    fit_result: Coefficients, metrics and diagnostics.\n    series: The fitted series, if stored.",
   "properties": {
     "fit_params": {
       "additionalProperties": true,

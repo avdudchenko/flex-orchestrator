@@ -1,4 +1,4 @@
-# One tenant's own Ray cluster on Kubernetes, with KubeRay (PLAN.md D13, D14).
+# One tenant's own Ray cluster on Kubernetes, with KubeRay.
 # Apply it in the tenant's namespace, next to its default-deny NetworkPolicy:
 #
 #   sed "s/TENANT/tenant-a/g; s#IMAGE#registry/flexorch-tenant:0.1#" raycluster.yaml \
