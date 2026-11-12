@@ -179,7 +179,7 @@ def test_a_study_runs_and_reads_back_in_a_new_orchestrator(tmp_path):
         "base_model_spec": "base",
         "hooks": HOOKS,
         "sweeps": [{"type": "variable", "name": "v", "path": "p.v", "values": [1, 2]}],
-        "export": {"exclude": ["pid", "threads"]},
+        "export": {"exclude": ["process", "threads"]},
     }
     with Orchestrator(FileBackend(tmp_path / "store"), environ={}) as orch:
         orch.create_study("s")

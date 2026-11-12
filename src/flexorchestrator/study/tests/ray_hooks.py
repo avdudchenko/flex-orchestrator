@@ -7,11 +7,12 @@
   and kills its worker process;
 - ``fail``: raise while building.
 
-Any other override is added to ``x``. The model also records the worker's
-process id and ``OMP_NUM_THREADS``.
+Any other override is added to ``x``. The model also records which worker
+process built it (``process``) and its ``OMP_NUM_THREADS``.
 """
 
 import os
+import secrets
 import time
 from pathlib import Path
 
@@ -20,6 +21,11 @@ import pyomo.environ as pyo
 from flexorchestrator.hooks import SolveOutcome
 
 STEER = ("sleep", "crash_once", "fail")
+
+# Drawn once per process, when a worker first imports this module. Unlike the
+# pid, a later process can't get the same one: Windows reuses pids quickly.
+# 52 bits, so it is exact as the float a Pyomo Var holds.
+PROCESS = float(secrets.randbits(52))
 
 
 def build(spec: dict, **overrides):
@@ -34,7 +40,7 @@ def build(spec: dict, **overrides):
     m = pyo.ConcreteModel()
     extra = sum(float(v) for k, v in overrides.items() if k not in STEER)
     m.x = pyo.Var(initialize=spec["value"] + extra)
-    m.pid = pyo.Var(initialize=os.getpid())
+    m.process = pyo.Var(initialize=PROCESS)
     m.threads = pyo.Var(initialize=float(os.environ.get("OMP_NUM_THREADS", "0")))
     return m
 

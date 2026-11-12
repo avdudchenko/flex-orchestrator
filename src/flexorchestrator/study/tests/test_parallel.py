@@ -52,7 +52,7 @@ def study(values=(1, 2, 3, 4, 5, 6), **fields):
             {"type": "variable", "name": "v", "path": "p.v", "values": list(values)},
         ],
         "output_name": "{spec}_{v}",
-        "export": {"exclude": ["pid", "threads"]},
+        "export": {"exclude": ["process", "threads"]},
         **fields,
     }
 
@@ -110,8 +110,9 @@ def test_workers_run_one_thread_per_library(orch):
 def test_max_calls_restarts_workers(orch):
     cfg = study(export={}, execution={"max_calls": 1})
     orch.execute_study(cfg, max_workers=2)
-    pids = [r.scalars()["pid"] for r in orch.stored_model_results()]
-    assert len(pids) == 12 and len(set(pids)) == 12
+    # One process per task: each was a new worker, so each drew its own token.
+    processes = [r.scalars()["process"] for r in orch.stored_model_results()]
+    assert len(processes) == 12 and len(set(processes)) == 12
 
 
 def test_a_hung_task_is_killed_at_its_timeout_and_the_sweep_goes_on(orch):
